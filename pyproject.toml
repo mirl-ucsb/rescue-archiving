@@ -5,12 +5,12 @@ build-backend = "hatchling.build"
 [project]
 name = "rescue-archiving"
 version = "0.1.0"
-description = "Local-first, human-in-the-loop counter-archival capture pipeline with verifiable provenance."
+description = "Local-first, human-in-the-loop pipeline for preserving at-risk media with verifiable provenance."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "MIRL — Material / Image Research Lab, UCSB" }]
-keywords = ["archiving", "provenance", "chain-of-custody", "human-rights", "preservation"]
+keywords = ["archiving", "digital-preservation", "provenance", "chain-of-custody", "integrity"]
 
 # Hard dependencies only. Every external capture tool (yt-dlp, gallery-dl,
 # ffmpeg, exiftool, archivebox) and the perceptual-hash stack are OPTIONAL and
