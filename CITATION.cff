@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: rescue-archiving
+abstract: >-
+  A local-first, human-in-the-loop pipeline for preserving at-risk media with
+  verifiable provenance: capture, integrity (SHA-256) and perceptual hashing, an
+  independent Wayback Machine snapshot, an append-only chain of custody, and
+  portable export. Built to protect both file integrity and the people who
+  contribute material.
+type: software
+authors:
+  - family-names: "O'Brien"
+    given-names: Jeff
+    affiliation: "Material / Image Research Lab (MIRL), University of California, Santa Barbara"
+version: "0.1.0"
+date-released: "2026-06-01"
+license: MIT
+repository-code: "https://github.com/mirl-ucsb/rescue-archiving"
+url: "https://github.com/mirl-ucsb/rescue-archiving"
+keywords:
+  - digital preservation
+  - web archiving
+  - provenance
+  - chain of custody
+  - integrity
+  - archiving
