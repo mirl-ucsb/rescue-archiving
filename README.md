@@ -284,7 +284,7 @@ operator-supplied items.
 
 Maintained by MIRL (Material / Image Research Lab), Department of History of Art
 and Architecture, UC Santa Barbara. Part of the Beirut 2026 / Latent Ground
-slate. Contact: mirl@arthistory.ucsb.edu.
+slate.
 
 Released under the MIT License (see `LICENSE`). Note that the license
 covers the software only. Captured material is governed by the source
