@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="736" height="782" viewBox="0 0 736 782" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="13">
+<rect width="736" height="782" rx="8" fill="#0d1117"/>
+<rect width="736" height="30" fill="#161b22"/>
+<rect y="22" width="736" height="8" fill="#161b22"/>
+<circle cx="18" cy="15" r="6" fill="#ff5f56"/>
+<circle cx="36" cy="15" r="6" fill="#ffbd2e"/>
+<circle cx="54" cy="15" r="6" fill="#27c93f"/>
+<text x="368" y="19" fill="#8b949e" text-anchor="middle" font-size="11">inspecting + verifying integrity</text>
+<text x="16" y="59" xml:space="preserve" fill="#7ee787">$ rescue-archiving show 1</text>
+<text x="16" y="79" xml:space="preserve" fill="#79c0ff">Item #1  [captured]</text>
+<text x="16" y="99" xml:space="preserve" fill="#c9d1d9">  ingest_ts       : 2026-06-02T02:29:07+00:00</text>
+<text x="16" y="119" xml:space="preserve" fill="#c9d1d9">  ingested_by     : curator</text>
+<text x="16" y="139" xml:space="preserve" fill="#c9d1d9">  source_kind     : file</text>
+<text x="16" y="159" xml:space="preserve" fill="#c9d1d9">  platform        : local-file</text>
+<text x="16" y="179" xml:space="preserve" fill="#c9d1d9">  claimed_location: Main Library</text>
+<text x="16" y="199" xml:space="preserve" fill="#c9d1d9">  tags            : demo,survey</text>
+<text x="16" y="219" xml:space="preserve" fill="#c9d1d9">  description     : survey clip</text>
+<text x="16" y="239" xml:space="preserve" fill="#c9d1d9"></text>
+<text x="16" y="259" xml:space="preserve" fill="#c9d1d9">  Files (6)</text>
+<text x="16" y="279" xml:space="preserve" fill="#c9d1d9">    [original/video] originals/item_000001/survey-clip.mp4</text>
+<text x="16" y="299" xml:space="preserve" fill="#c9d1d9">       sha256=946e0c79681cbea20c062faa5004186ccbc5b1db511821c0828d7d9fb327ec14 bytes=10997</text>
+<text x="16" y="319" xml:space="preserve" fill="#c9d1d9">    [keyframe/image] originals/item_000001/keyframes/survey-clip_kf00.png</text>
+<text x="16" y="339" xml:space="preserve" fill="#c9d1d9">       sha256=08b26232c543266ae5147ffff6cdefdbf4e61f662550bbe0706cdd434c9f0076 bytes=13218</text>
+<text x="16" y="359" xml:space="preserve" fill="#c9d1d9">    [keyframe/image] originals/item_000001/keyframes/survey-clip_kf01.png</text>
+<text x="16" y="379" xml:space="preserve" fill="#c9d1d9">       sha256=9aee16e6edb14ff4241943c31fd24915fc62937fe7e4ac72a385051ca8e08dd8 bytes=13655</text>
+<text x="16" y="399" xml:space="preserve" fill="#c9d1d9">    [keyframe/image] originals/item_000001/keyframes/survey-clip_kf02.png</text>
+<text x="16" y="419" xml:space="preserve" fill="#c9d1d9">       sha256=566a7ad147e829b42bf1ce19c6bbd3dbf2603fc7cd1c71f71a0bd3c16f65ba2a bytes=13959</text>
+<text x="16" y="439" xml:space="preserve" fill="#c9d1d9">    [keyframe/image] originals/item_000001/keyframes/survey-clip_kf03.png</text>
+<text x="16" y="459" xml:space="preserve" fill="#c9d1d9">       sha256=0a6b7d0f7097cb4d7b508afb6d7ca190bfea006c174bd4ad1d19ddb2fdf5a12a bytes=14176</text>
+<text x="16" y="479" xml:space="preserve" fill="#c9d1d9">    [keyframe/image] originals/item_000001/keyframes/survey-clip_kf04.png</text>
+<text x="16" y="499" xml:space="preserve" fill="#c9d1d9">       sha256=1f06f9a42c0ce3286a3a8a1f98a169f288a1c6cb2c1b20b2797c39a5099f4deb bytes=13966</text>
+<text x="16" y="519" xml:space="preserve" fill="#c9d1d9"></text>
+<text x="16" y="539" xml:space="preserve" fill="#c9d1d9">  Captures (1)</text>
+<text x="16" y="559" xml:space="preserve" fill="#c9d1d9">    file-ingest  ok       2026-06-02T02:29:07+00:00  </text>
+<text x="16" y="579" xml:space="preserve" fill="#c9d1d9"></text>
+<text x="16" y="599" xml:space="preserve" fill="#c9d1d9">  Custody log (last 4)</text>
+<text x="16" y="619" xml:space="preserve" fill="#c9d1d9">    2026-06-02T02:29:07+00:00  curator        create_item</text>
+<text x="16" y="639" xml:space="preserve" fill="#c9d1d9">    2026-06-02T02:29:07+00:00  curator        ingest_file</text>
+<text x="16" y="659" xml:space="preserve" fill="#c9d1d9">    2026-06-02T02:29:07+00:00  curator        hash</text>
+<text x="16" y="679" xml:space="preserve" fill="#c9d1d9">    2026-06-02T02:29:08+00:00  curator        keyframes_extracted</text>
+<text x="16" y="699" xml:space="preserve" fill="#c9d1d9"></text>
+<text x="16" y="719" xml:space="preserve" fill="#7ee787">$ rescue-archiving check</text>
+<text x="16" y="739" xml:space="preserve" fill="#c9d1d9"></text>
+<text x="16" y="759" xml:space="preserve" fill="#79c0ff">Checked 6 files: 6 ok, 0 mismatch, 0 missing.</text>
+</svg>

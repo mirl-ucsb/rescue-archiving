@@ -24,6 +24,7 @@ for those who want them.
 - [Installing the tool](#installing-the-tool)
 - [Key words, in plain language](#key-words-in-plain-language)
 - [Your first capture, step by step](#your-first-capture-step-by-step)
+- [See it in action](#see-it-in-action)
 - [The everyday commands](#the-everyday-commands)
 - [Where your files are kept](#where-your-files-are-kept)
 - [Getting your archive out](#getting-your-archive-out)
@@ -188,6 +189,9 @@ This prints where your files will be stored and a checklist of which optional
 programs are installed. Anything marked missing is fine; it just means that one
 feature is skipped.
 
+![The doctor command showing config paths and a capability checklist. Items
+marked MISS are simply skipped; the core features still work.](docs/img/doctor.svg)
+
 ---
 
 ## Key words, in plain language
@@ -284,6 +288,21 @@ variation on these.
 When you are done for the day, you can simply close the Terminal. Next time, open
 it, `cd` back to the project folder, run `source .venv/bin/activate`, and carry
 on.
+
+---
+
+## See it in action
+
+The walkthrough above uses a tiny text file so anyone can follow it. Here is a
+slightly richer example: capturing a short video clip offline (the `--no-wayback`
+flag skips the internet snapshot), then inspecting the result and confirming
+every stored file is intact.
+
+![Adding a video clip to the archive and listing the result: the tool reports
+the new item, its fingerprint, and that five keyframes were extracted.](docs/img/capture.svg)
+
+![Showing the full record for the item, then re-hashing every file. The custody
+log lists each step, and the check reports six files all intact.](docs/img/inspect.svg)
 
 ---
 

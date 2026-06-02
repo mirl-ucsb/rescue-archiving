@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="705" height="482" viewBox="0 0 705 482" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="13">
+<rect width="705" height="482" rx="8" fill="#0d1117"/>
+<rect width="705" height="30" fill="#161b22"/>
+<rect y="22" width="705" height="8" fill="#161b22"/>
+<circle cx="18" cy="15" r="6" fill="#ff5f56"/>
+<circle cx="36" cy="15" r="6" fill="#ffbd2e"/>
+<circle cx="54" cy="15" r="6" fill="#27c93f"/>
+<text x="352" y="19" fill="#8b949e" text-anchor="middle" font-size="11">rescue-archiving doctor</text>
+<text x="16" y="59" xml:space="preserve" fill="#7ee787">$ rescue-archiving doctor</text>
+<text x="16" y="79" xml:space="preserve" fill="#c9d1d9">Configuration</text>
+<text x="16" y="99" xml:space="preserve" fill="#c9d1d9">  data dir        : /private/tmp/ra-shot/data</text>
+<text x="16" y="119" xml:space="preserve" fill="#c9d1d9">  operator        : curator</text>
+<text x="16" y="139" xml:space="preserve" fill="#c9d1d9">  wayback enabled : True</text>
+<text x="16" y="159" xml:space="preserve" fill="#c9d1d9">  archivebox      : False</text>
+<text x="16" y="179" xml:space="preserve" fill="#c9d1d9"></text>
+<text x="16" y="199" xml:space="preserve" fill="#c9d1d9">Capabilities</text>
+<text x="16" y="219" xml:space="preserve" fill="#56d364">  [ok ] yt-dlp  (2025.11.12)</text>
+<text x="16" y="239" xml:space="preserve" fill="#ff7b72">  [MISS] gallery-dl</text>
+<text x="16" y="259" xml:space="preserve" fill="#56d364">  [ok ] ffmpeg  (ffmpeg version 8.0.1 Copyright (c) 2000-2025 the FFmpeg developers)</text>
+<text x="16" y="279" xml:space="preserve" fill="#56d364">  [ok ] ffprobe  (ffprobe version 8.0.1 Copyright (c) 2007-2025 the FFmpeg developers)</text>
+<text x="16" y="299" xml:space="preserve" fill="#ff7b72">  [MISS] exiftool</text>
+<text x="16" y="319" xml:space="preserve" fill="#ff7b72">  [MISS] archivebox</text>
+<text x="16" y="339" xml:space="preserve" fill="#ff7b72">  [MISS] imagehash</text>
+<text x="16" y="359" xml:space="preserve" fill="#ff7b72">  [MISS] Pillow</text>
+<text x="16" y="379" xml:space="preserve" fill="#ff7b72">  [MISS] pyexiftool</text>
+<text x="16" y="399" xml:space="preserve" fill="#c9d1d9"></text>
+<text x="16" y="419" xml:space="preserve" fill="#c9d1d9">Missing tools degrade gracefully; affected steps are skipped and</text>
+<text x="16" y="439" xml:space="preserve" fill="#c9d1d9">recorded in the custody log. Install for full capability:</text>
+<text x="16" y="459" xml:space="preserve" fill="#c9d1d9">  gallery-dl, exiftool, archivebox, imagehash, Pillow, pyexiftool</text>
+</svg>

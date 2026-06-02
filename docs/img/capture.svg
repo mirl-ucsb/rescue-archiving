@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="948" height="222" viewBox="0 0 948 222" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="13">
+<rect width="948" height="222" rx="8" fill="#0d1117"/>
+<rect width="948" height="30" fill="#161b22"/>
+<rect y="22" width="948" height="8" fill="#161b22"/>
+<circle cx="18" cy="15" r="6" fill="#ff5f56"/>
+<circle cx="36" cy="15" r="6" fill="#ffbd2e"/>
+<circle cx="54" cy="15" r="6" fill="#27c93f"/>
+<text x="474" y="19" fill="#8b949e" text-anchor="middle" font-size="11">capturing an item</text>
+<text x="16" y="59" xml:space="preserve" fill="#7ee787">$ rescue-archiving add survey-clip.mp4 --location &quot;Main Library&quot; --note &quot;survey clip&quot; --tags demo,survey --no-wayback</text>
+<text x="16" y="79" xml:space="preserve" fill="#79c0ff">Added item #1  (file)</text>
+<text x="16" y="99" xml:space="preserve" fill="#c9d1d9">  original video  946e0c79681cbea2...  originals/item_000001/survey-clip.mp4</text>
+<text x="16" y="119" xml:space="preserve" fill="#c9d1d9">  note    : 5 keyframes extracted</text>
+<text x="16" y="139" xml:space="preserve" fill="#c9d1d9"></text>
+<text x="16" y="159" xml:space="preserve" fill="#7ee787">$ rescue-archiving list</text>
+<text x="16" y="179" xml:space="preserve" fill="#c9d1d9">  ID  STATUS     GFX FILES  VERDICT      PLATFORM   INGESTED</text>
+<text x="16" y="199" xml:space="preserve" fill="#c9d1d9">   1  captured           6  unverified   local-file 2026-06-02T02:29:07+00:00</text>
+</svg>
