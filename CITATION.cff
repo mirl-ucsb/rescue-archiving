@@ -11,6 +11,7 @@ type: software
 authors:
   - family-names: "O'Brien"
     given-names: Jeff
+    orcid: "https://orcid.org/0009-0007-0055-6171"
     affiliation: "Material / Image Research Lab (MIRL), University of California, Santa Barbara"
 version: "0.1.0"
 date-released: "2026-06-01"
