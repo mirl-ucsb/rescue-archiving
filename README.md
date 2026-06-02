@@ -6,8 +6,6 @@ media, records an independent timestamped copy, computes integrity and
 similarity hashes, extracts available metadata, logs an append-only
 provenance trail, and exports a portable manifest.
 
-Project 3 of the Beirut 2026 / Latent Ground slate. MIRL, UCSB.
-
 > This tool preserves ephemeral citizen documentation with verifiable
 > provenance, for scholarship and possible future accountability use. It is a
 > capture system, not an autonomous scraper, and not a verification engine.
