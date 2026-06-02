@@ -13,7 +13,8 @@ provenance trail, and exports a portable manifest.
 
 ## Guardrails (non-negotiable)
 
-These are enforced in code, not just documented. See `SECURITY` notes below.
+These are enforced in code, not just documented. See `SECURITY.md` for the
+security policy, and the "Threat model and limitations" section below.
 
 1. **Human-supplied input only, no credentialed access.** Operators add one
    specific URL or file per `add`. There is no crawling and no feed expansion:
