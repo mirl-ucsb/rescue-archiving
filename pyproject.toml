@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rescue-archive"
+version = "0.1.0"
+description = "Local-first, human-in-the-loop counter-archival capture pipeline with verifiable provenance."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "MIRL — Material / Image Research Lab, UCSB" }]
+keywords = ["archiving", "provenance", "chain-of-custody", "human-rights", "preservation"]
+
+# Hard dependencies only. Every external capture tool (yt-dlp, gallery-dl,
+# ffmpeg, exiftool, archivebox) and the perceptual-hash stack are OPTIONAL and
+# detected at runtime; the pipeline ingests, hashes, logs, and exports without
+# them. See the [project.optional-dependencies] 'media' extra and README.
+dependencies = [
+    "typer>=0.12",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+# Perceptual hashing + EXIF. yt-dlp/gallery-dl are usually installed as
+# standalone binaries, but are pip-installable here for convenience.
+media = [
+    "Pillow>=10.0",
+    "ImageHash>=4.3",
+    "PyExifTool>=0.5",
+    "yt-dlp>=2024.0",
+    "gallery-dl>=1.26",
+]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+rescue-archive = "rescue_archive.cli:main"
+
+[project.urls]
+Homepage = "https://mirl.arthistory.ucsb.edu"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rescue_archive"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

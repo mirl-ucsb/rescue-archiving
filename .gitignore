@@ -1,0 +1,31 @@
+# Captured material and the database are sensitive, access-controlled, and
+# must NEVER be committed. Keep the directories, ignore their contents.
+/data/
+/exports/
+
+# But keep the empty dirs tracked so the layout is obvious.
+!/data/.gitkeep
+!/exports/.gitkeep
+
+# ArchiveBox collection (if enabled) lives under data/ but be explicit.
+archivebox/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env
+
+# Claude Code harness config (not part of the tool; may carry local/cross-project settings)
+/.claude/
+
+# Tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
