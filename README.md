@@ -1,4 +1,4 @@
-# rescue-archive
+# rescue-archiving
 
 A local-first, human-in-the-loop counter-archival capture pipeline. Given a
 single source item supplied by an operator (a URL or a file), it captures the
@@ -74,7 +74,7 @@ Every external capture tool is optional and detected at runtime. Run `doctor`
 to see what is available:
 
 ```bash
-rescue-archive doctor
+rescue-archiving doctor
 ```
 
 External tools (install as needed via Homebrew, apt, or pip):
@@ -94,32 +94,32 @@ external tools at all.
 ## Quickstart
 
 ```bash
-rescue-archive init                      # create the data tree + schema
+rescue-archiving init                      # create the data tree + schema
 
 # Ingest a local file (no network):
-rescue-archive add ./clip.mp4 \
+rescue-archiving add ./clip.mp4 \
     --location "Dahieh, Beirut" \
     --datetime "2026-03-18T14:30:00+02:00" \
     --note "rooftop, plume to the south" \
     --tags "beirut,airstrike,rooftop"
 
 # Ingest a web item (downloads, snapshots to Wayback, hashes):
-rescue-archive add "https://example.com/post/123" --tags "beirut"
+rescue-archiving add "https://example.com/post/123" --tags "beirut"
 
 # Flag graphic content (suppresses auto keyframes/thumbnails):
-rescue-archive add ./graphic.mp4 --graphic
+rescue-archiving add ./graphic.mp4 --graphic
 
 # Record a sensitive uploader handle (access-controlled, never default-exported):
-rescue-archive add "https://example.com/x" --uploader-handle "@source" \
+rescue-archiving add "https://example.com/x" --uploader-handle "@source" \
     --contributor-note "trusted local journalist"
 
-rescue-archive list --status captured
-rescue-archive show 1
-rescue-archive verify 1 --verdict confirmed --method "geolocation; reverse image" --verifier "analyst-2"
-rescue-archive check                     # re-hash everything, report drift
-rescue-archive dedup                     # link exact + near duplicates
-rescue-archive export --format json      # manifest into exports/
-rescue-archive export --format bundle     # manifest + CSV + read-only originals + SHA256SUMS
+rescue-archiving list --status captured
+rescue-archiving show 1
+rescue-archiving verify 1 --verdict confirmed --method "geolocation; reverse image" --verifier "analyst-2"
+rescue-archiving check                     # re-hash everything, report drift
+rescue-archiving dedup                     # link exact + near duplicates
+rescue-archiving export --format json      # manifest into exports/
+rescue-archiving export --format bundle     # manifest + CSV + read-only originals + SHA256SUMS
 ```
 
 Exit codes: `check` exits non-zero if any file mismatches or is missing, so it
@@ -160,7 +160,7 @@ can gate cron jobs and CI-style integrity sweeps.
 
 ```
 data/                          # mode 0700, gitignored, access-controlled
-  rescue_archive.db            # mode 0600
+  rescue_archiving.db            # mode 0600
   originals/
     item_000001/
       <id>.mp4                 # mode 0444, byte-identical to capture
@@ -178,10 +178,10 @@ The handoff asked that these be settled before M3. They are now recorded as
 project decisions; revisit by editing this section and the relevant config.
 
 1. **Storage path, encryption at rest, access control.**
-   - Storage path is `./data` (override with `RESCUE_ARCHIVE_DATA`).
+   - Storage path is `./data` (override with `RESCUE_ARCHIVING_DATA`).
    - Access control is POSIX permissions: data tree 0700, database 0600,
      originals 0444. Operator identity for custody attribution comes from
-     `RESCUE_ARCHIVE_OPERATOR` (set this to a role label rather than a personal
+     `RESCUE_ARCHIVING_OPERATOR` (set this to a role label rather than a personal
      name if staff anonymity matters).
    - **Decision: encryption at rest is delegated to the operating system.**
      The `data/` tree must live on a FileVault (macOS) or LUKS (Linux)
@@ -193,7 +193,7 @@ project decisions; revisit by editing this section and the relevant config.
 2. **Independent provenance: ArchiveBox WARC versus Wayback-only.**
    - **Decision: Wayback-only by default.** Every web item requests a Wayback
      Machine snapshot. ArchiveBox WARC capture stays an opt-in
-     (`RESCUE_ARCHIVE_ARCHIVEBOX=1`) for operators who want self-hosted,
+     (`RESCUE_ARCHIVING_ARCHIVEBOX=1`) for operators who want self-hosted,
      full-page preservation and have ArchiveBox installed.
 
 3. **Partner schema mapping (Airwars / CIR / Mnemonic / Syrian Archive).**

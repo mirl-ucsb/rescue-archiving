@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "rescue-archive"
+name = "rescue-archiving"
 version = "0.1.0"
 description = "Local-first, human-in-the-loop counter-archival capture pipeline with verifiable provenance."
 readme = "README.md"
@@ -36,13 +36,13 @@ dev = [
 ]
 
 [project.scripts]
-rescue-archive = "rescue_archive.cli:main"
+rescue-archiving = "rescue_archiving.cli:main"
 
 [project.urls]
 Homepage = "https://mirl.arthistory.ucsb.edu"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/rescue_archive"]
+packages = ["src/rescue_archiving"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

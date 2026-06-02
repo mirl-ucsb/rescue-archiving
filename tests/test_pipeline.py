@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from rescue_archive import capture, config, db, dedup, export, hashing, metadata
+from rescue_archiving import capture, config, db, dedup, export, hashing, metadata
 
 
 @pytest.fixture()

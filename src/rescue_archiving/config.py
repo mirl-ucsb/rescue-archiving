@@ -46,9 +46,9 @@ def _env_path(var: str, default: Path) -> Path:
 class Config:
     """Resolved runtime configuration.
 
-    Override the project root with ``RESCUE_ARCHIVE_ROOT`` and the data
-    directory with ``RESCUE_ARCHIVE_DATA``. The operator identity used for
-    custody-log actor attribution comes from ``RESCUE_ARCHIVE_OPERATOR``
+    Override the project root with ``RESCUE_ARCHIVING_ROOT`` and the data
+    directory with ``RESCUE_ARCHIVING_DATA``. The operator identity used for
+    custody-log actor attribution comes from ``RESCUE_ARCHIVING_OPERATOR``
     (falling back to the OS user).
     """
 
@@ -64,7 +64,7 @@ class Config:
 
     @property
     def db_path(self) -> Path:
-        return self.data_dir / "rescue_archive.db"
+        return self.data_dir / "rescue_archiving.db"
 
     @property
     def originals_dir(self) -> Path:
@@ -102,17 +102,17 @@ def _chmod_quiet(path: Path, mode: int) -> None:
 
 @lru_cache(maxsize=1)
 def get_config() -> Config:
-    root = _env_path("RESCUE_ARCHIVE_ROOT", Path.cwd())
-    data_dir = _env_path("RESCUE_ARCHIVE_DATA", root / "data")
-    exports_dir = _env_path("RESCUE_ARCHIVE_EXPORTS", root / "exports")
+    root = _env_path("RESCUE_ARCHIVING_ROOT", Path.cwd())
+    data_dir = _env_path("RESCUE_ARCHIVING_DATA", root / "data")
+    exports_dir = _env_path("RESCUE_ARCHIVING_EXPORTS", root / "exports")
     operator = (
-        os.environ.get("RESCUE_ARCHIVE_OPERATOR")
+        os.environ.get("RESCUE_ARCHIVING_OPERATOR")
         or os.environ.get("USER")
         or os.environ.get("USERNAME")
         or "unknown-operator"
     )
-    wayback = os.environ.get("RESCUE_ARCHIVE_WAYBACK", "1").lower() not in ("0", "false", "no")
-    archivebox = os.environ.get("RESCUE_ARCHIVE_ARCHIVEBOX", "0").lower() in ("1", "true", "yes")
+    wayback = os.environ.get("RESCUE_ARCHIVING_WAYBACK", "1").lower() not in ("0", "false", "no")
+    archivebox = os.environ.get("RESCUE_ARCHIVING_ARCHIVEBOX", "0").lower() in ("1", "true", "yes")
     return Config(
         root=root,
         data_dir=data_dir,

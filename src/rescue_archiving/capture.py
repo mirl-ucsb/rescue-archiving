@@ -189,7 +189,7 @@ def wayback_save(cfg: config.Config, url: str) -> tuple[str | None, str, str]:
             cfg.wayback_endpoint + url,
             timeout=cfg.wayback_timeout,
             allow_redirects=True,
-            headers={"User-Agent": "rescue-archive/0.1 (+counter-archival capture)"},
+            headers={"User-Agent": "rescue-archiving/0.1 (+counter-archival capture)"},
         )
         loc = resp.headers.get("Content-Location") or resp.headers.get("content-location")
         if loc:

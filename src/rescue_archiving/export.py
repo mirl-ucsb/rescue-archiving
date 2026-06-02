@@ -150,7 +150,7 @@ def build_manifest(
 
     return {
         "manifest_version": 1,
-        "tool": "rescue-archive",
+        "tool": "rescue-archiving",
         "generated_ts": db.utcnow(),
         "generated_by": cfg.operator,
         "filters": {"since": since},
@@ -265,7 +265,7 @@ def export_bundle(conn, cfg, *, since=None, include_sensitive=False,
 def _bundle_readme(redact_source: bool, include_sensitive: bool,
                    excluded_sidecars: int = 0) -> str:
     lines = [
-        "rescue-archive export bundle",
+        "rescue-archiving export bundle",
         "============================",
         "",
         "manifest.json  - full item/file/capture/verification manifest",
