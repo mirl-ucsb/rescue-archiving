@@ -1,3 +1,5 @@
+![rescue-archiving: a local-first, human-in-the-loop tool for preserving at-risk media with verifiable provenance.](docs/img/header.png)
+
 # rescue-archiving
 
 **Make a safe, verifiable copy of online media before it disappears.**
