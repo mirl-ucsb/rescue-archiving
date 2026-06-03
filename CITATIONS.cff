@@ -1,0 +1,35 @@
+cff-version: 1.2.0
+message: "If you use this software in your research, please cite it as below."
+type: software
+title: "MIRL 3D Artifact Analyzer"
+abstract: >-
+  A browser-based tool for visualizing and quantitatively analyzing
+  3D-scanned cultural artifacts. Developed at the Material / Image
+  Research Lab (MIRL), Department of History of Art & Architecture,
+  University of California, Santa Barbara.
+authors:
+  - family-names: Bodenstein
+    given-names: Veronica
+    affiliation: "Material / Image Research Lab, History of Art & Architecture, University of California, Santa Barbara"
+    # orcid: "https://orcid.org/0000-0000-0000-0000"  # add if available
+  - family-names: "O'Brien"
+    given-names: Jeff
+    email: jeffobrien@ucsb.edu
+    affiliation: "Material / Image Research Lab, History of Art & Architecture, University of California, Santa Barbara"
+    orcid: "https://orcid.org/0009-0007-0055-6171"
+repository-code: "https://github.com/vbodenstein/mirl-3d-analyzer"
+url: "https://mirl.arthistory.ucsb.edu"
+license: MIT
+version: "2.0.0"
+date-released: "2026-06-03"
+keywords:
+  - 3D visualization
+  - mesh analysis
+  - cultural heritage
+  - digital humanities
+  - art history
+  - surface analysis
+  - curvature
+  - structured-light scanning
+  - three.js
+  - WebGL
