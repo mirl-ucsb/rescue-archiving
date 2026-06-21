@@ -2,7 +2,7 @@
 
 **Make a safe, verifiable copy of online media before it disappears.**
 
-> **In active development.** This tool is being built and refined in the open. Its features, file formats, and interface may still change, and some parts may be incomplete or rough. Please keep your own copies of anything important, and reports of whatever breaks are welcome.
+> **In active development.** This tool is being built and refined in the open. Its features, file formats, and interface may still change, and some parts may be incomplete or rough. Because it is still in development, do not treat it as your only safeguard when protecting a source or preserving evidence, and verify the saved copy and its record independently before relying on them. Please keep your own copies of anything important, and reports of whatever breaks are welcome.
 
 rescue-archiving is a small, local-first tool. You give it one link or one file
 at a time. It downloads the media, makes a tamper-evident copy on your own
