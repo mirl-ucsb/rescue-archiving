@@ -699,10 +699,13 @@ exports/                       # manifests, CSVs, bundles
    manifest, designed to be mappable; a `--schema` adapter can be added later
    without touching the capture path.
 4. **Indefinite retention, manual deletion only.** Nothing is auto-deleted;
-   long-term preservation is the purpose. Deletion is a deliberate operator
-   action, and the custody-log record of any deletion survives the item.
-   Redaction tooling already exists (graphic flag, `item_sensitive`, sidecar
-   exclusion from bundles, `--redact-source`).
+   long-term preservation is the purpose, and the tool ships no delete command.
+   Deletion is therefore a deliberate manual action, and the append-only custody
+   log shapes what is possible: because every custody entry is bound to its item,
+   the database refuses to hard-delete an item that already carries custody
+   history rather than cascading its log away, so a record cannot be quietly
+   erased through normal use. Redaction tooling already exists (graphic flag,
+   `item_sensitive`, sidecar exclusion from bundles, `--redact-source`).
 
 ### Threat model and limitations
 
@@ -715,9 +718,10 @@ Does not, and caveats: it does not verify content (people do); gallery-dl is
 pinned to a single item (`--range 1`), which prevents feed expansion but can
 under-capture a multi-image post; provenance sidecars persist on disk and carry
 identity/GPS, so the whole `data/` tree is sensitive; integrity anchors are
-SHA-256 plus the append-only log, not yet cryptographic signatures, so a party
-with direct disk/database access could rebuild the store (OS permissions and
-full-disk encryption are the backstop until C2PA signing lands); Wayback is
+SHA-256 plus the append-only log, not yet cryptographic signatures: the custody
+triggers stop accidental or casual rewriting, but a party with direct disk or
+database access can drop the triggers or rebuild the store, so OS permissions
+and full-disk encryption are the backstop until C2PA signing lands; Wayback is
 best-effort; and the tool assumes a trusted operator on a secured, encrypted
 host (it is not hardened against a hostile operator).
 
