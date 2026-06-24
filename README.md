@@ -282,7 +282,10 @@ rescue-archiving export --format json
 ```
 
 It writes a manifest file into your `exports` folder and prints the path. Open
-that file in any text editor to see the human-readable record.
+that file in any text editor to see the human-readable record. You will also see
+a short reminder that a plain JSON or CSV is meant for your own records; to hand
+material to someone else, export a `bundle`, which is redacted for sharing by
+default.
 
 That is the whole loop: **add, list, show, check, export.** Everything else is a
 variation on these.
@@ -445,18 +448,27 @@ safeguard, but encryption is your responsibility.
   Excel or Google Sheets.
 - **`--format bundle`** - a self-contained folder with the summary, the table, a
   checksums file, and read-only copies of the captured files. Good for handing
-  to an archive or a partner.
+  to an archive or a partner. A bundle is **fail-safe**: because it is the thing
+  that leaves your machine, it redacts source links and staff names by default
+  (see "Keeping sources safe").
 
-Two privacy controls:
+Three privacy controls:
 
-- `--redact-source` - removes the original links from the export, for when you
-  are sharing widely and even the URL could identify a source.
-- `--include-sensitive` - the opposite: deliberately includes the protected
-  contributor details. The tool records in the custody log that you did this.
-  Use it only for trusted, access-controlled handoffs.
+- `--redact-source` - for a JSON or CSV export, strips the original links and the
+  operator/analyst names, for when you are sharing and even a URL could identify a
+  source. A bundle already does this by default.
+- `--internal` - for a bundle, the opposite of the default: keeps the source links
+  and staff names, for a copy that stays inside your own access-controlled store.
+- `--include-sensitive` - deliberately includes the protected contributor details
+  you flagged with `--uploader-handle` / `--contributor-note`. The tool records in
+  the custody log that you did this. Use it only for trusted, access-controlled
+  handoffs.
 
-By default an export carries **no** contributor identities and **no** copies of
-the platform's own metadata files, because those can name an uploader. See next.
+What this means by default: a **bundle** carries no source links, no staff names,
+no flagged contributor identities, and no copies of the platform's own metadata
+files. A plain **JSON or CSV** export is meant for working inside your own store:
+it keeps the source links (provenance) unless you add `--redact-source`, and the
+tool warns you when you export one without it. See next.
 
 ---
 
@@ -471,13 +483,14 @@ afterthought. In practice:
 - Files the platform produces (for example a video's accompanying data file) can
   secretly contain an uploader's name. The tool keeps those for your records but
   **never copies them into an export bundle** unless you explicitly ask.
-- If you need to share an export widely, `--redact-source` also strips the
-  original links, which can themselves contain a username.
-
-The trade-off worth knowing: a link you capture (say `example.com/some-user/...`)
-may contain a username, and normal exports keep links because they are part of
-the provenance. If that is too revealing for a particular handoff, use
-`--redact-source`.
+- A captured link (say `example.com/some-user/...`) can itself be the source's
+  identity. Because a **bundle** is built to leave your machine, it redacts those
+  links, and the operator and analyst names, **by default**. Use `--internal`
+  only for a bundle you are keeping inside your own store.
+- A plain **JSON or CSV** export keeps the links, because that output is for
+  working inside your access-controlled store and the links are part of the
+  provenance. If you are going to share one, add `--redact-source` (which also
+  strips the staff names); the tool warns you if you forget.
 
 ---
 
@@ -491,7 +504,8 @@ the provenance. If that is too revealing for a particular handoff, use
   erased.
 - **An independent copy.** The Internet Archive is asked to hold a dated
   snapshot of every web capture.
-- **Your sources.** Contributor identities stay out of exports by default.
+- **Your sources.** Flagged contributor identities are never exported by default,
+  and a shareable bundle also redacts source links and staff names by default.
 
 **Be aware that:**
 
@@ -590,7 +604,7 @@ and developers.
 | `verify ID` | Open a verification record. Options: `--verdict --method --notes --verifier`. |
 | `check [ID]` | Recompute SHA-256 and report match / mismatch / missing. Exits non-zero on any mismatch or missing file, so it can gate scheduled integrity sweeps. |
 | `dedup` | Link exact (SHA-256) and near (pHash) duplicates. Option: `--threshold`. |
-| `export` | Options: `--format json\|csv\|bundle --since --out --redact-source --include-sensitive --no-media`. |
+| `export` | Options: `--format json\|csv\|bundle --since --out --redact-source --internal --include-sensitive --no-media`. A bundle redacts source links and staff identity by default; `--internal` keeps them. |
 
 ### External tools (all optional, detected at runtime)
 
@@ -631,14 +645,17 @@ security policy.
    on ingest and frozen read-only (mode 0444). `check` re-verifies them later.
 3. **Independent provenance.** Every web item also requests a Wayback Machine
    snapshot, so a third party holds a timestamped copy. Failures are recorded.
-4. **Source protection.** Contributor and uploader identities are never recorded
-   or exported by default. A flagged handle is stored in a separate,
+4. **Source protection.** A flagged handle is stored in a separate,
    access-controlled table (`item_sensitive`), excluded from every default
    export; disclosure requires `--include-sensitive` and is logged. Provenance
    sidecars (yt-dlp `info.json`, EXIF `exif.json`) are kept read-only inside the
    data tree but never copied into an export bundle unless `--include-sensitive`
-   is passed; the manifest still lists their hashes. gallery-dl is pinned to
-   identity-free filenames.
+   is passed; the manifest still lists their hashes. Downloaders write
+   identity-free filenames. A source link can itself name an uploader, so a
+   **bundle** (the artifact that leaves the boundary) redacts source/Wayback
+   links and operator/analyst identity by default; `--internal` retains them for
+   in-boundary use. A plain JSON/CSV keeps the link for provenance unless
+   `--redact-source` is given, and the tool warns when it is not.
 5. **Local and private.** No publication and no cloud upload by default. The data
    tree is owner-only (0700); the database is 0600.
 6. **Graphic content.** Items can be flagged graphic; keyframe and thumbnail
@@ -705,7 +722,9 @@ exports/                       # manifests, CSVs, bundles
    the database refuses to hard-delete an item that already carries custody
    history rather than cascading its log away, so a record cannot be quietly
    erased through normal use. Redaction tooling already exists (graphic flag,
-   `item_sensitive`, sidecar exclusion from bundles, `--redact-source`).
+   `item_sensitive`, circulation-safe bundles that redact source links and staff
+   identity by default, sidecar exclusion from bundles, and `--redact-source` for
+   json/csv).
 
 ### Threat model and limitations
 

@@ -404,15 +404,25 @@ def export_cmd(
     format: str = typer.Option("json", "--format", help="json | csv | bundle."),
     since: str = typer.Option(None, "--since", help="Only items with ingest_ts >= this."),
     out: Path = typer.Option(None, "--out", help="Output path (file or bundle dir)."),
-    redact_source: bool = typer.Option(False, "--redact-source",
-                                       help="Strip source/Wayback URLs for wider sharing."),
+    redact_source: bool = typer.Option(
+        False, "--redact-source",
+        help="json/csv: strip source/Wayback URLs and staff identity for circulation."),
+    internal: bool = typer.Option(
+        False, "--internal",
+        help="bundle only: retain source URLs and staff identity (in-boundary use; "
+             "a bundle redacts both by default)."),
     include_sensitive: bool = typer.Option(
         False, "--include-sensitive",
         help="Include access-controlled identities (logged to custody)."),
     no_media: bool = typer.Option(False, "--no-media",
                                   help="Bundle only: omit copies of originals."),
 ) -> None:
-    """Export a JSON manifest, CSV, or a portable bundle."""
+    """Export a JSON manifest, CSV, or a portable bundle.
+
+    A bundle is fail-safe: source/Wayback URLs and staff identity are redacted
+    by default (use --internal to retain them for in-boundary use). A plain
+    json/csv retains URLs unless --redact-source.
+    """
     cfg = config.get_config()
     db.init_db(cfg)
     fmt = format.lower()
@@ -424,18 +434,28 @@ def export_cmd(
         if fmt == "json":
             path = export.export_json(conn, cfg, since=since,
                                       include_sensitive=include_sensitive,
-                                      redact_source=redact_source, out=out)
+                                      redact_source=redact_source,
+                                      redact_identity=redact_source, out=out)
         elif fmt == "csv":
             path = export.export_csv(conn, cfg, since=since,
                                      redact_source=redact_source, out=out)
         elif fmt == "bundle":
             path = export.export_bundle(conn, cfg, since=since,
                                         include_sensitive=include_sensitive,
-                                        redact_source=redact_source,
+                                        redact_source=not internal,
+                                        redact_identity=not internal,
                                         include_media=not no_media, out=out)
         else:
             raise typer.BadParameter("format must be json, csv, or bundle")
     _echo(f"Wrote {fmt} export: {_bold(str(path))}")
+    if fmt in ("json", "csv") and not redact_source:
+        _echo("  WARNING: retains source URLs (and, for json, operator/analyst")
+        _echo("           identity) that can identify an uploader. Use --redact-source")
+        _echo("           for material that will circulate, or export a bundle")
+        _echo("           (redacted by default).")
+    if fmt == "bundle" and internal:
+        _echo("  WARNING: --internal bundle retains source URLs and staff identity;")
+        _echo("           for in-boundary use only, not wider circulation.")
     if include_sensitive:
         _echo("  WARNING: this export includes access-controlled identities.")
 

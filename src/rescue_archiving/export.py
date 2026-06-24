@@ -5,12 +5,18 @@ Source-protection contract (enforced here):
     contributor notes) is NEVER read on the default path. It is included only
     when ``include_sensitive=True`` is passed explicitly, and that disclosure
     is recorded in the custody log by the caller.
-  * ``redact_source=True`` additionally strips source/Wayback/WARC URLs for
-    exports intended for wider circulation, where the URL itself is
-    identifying. The default keeps capture URLs (required for provenance).
+  * ``redact_source=True`` strips source/Wayback/WARC URLs, and
+    ``redact_identity=True`` strips operator/analyst identity (ingested_by,
+    generated_by, verifier). A source URL on a handle-based platform IS the
+    uploader's identity, so both matter for material that will circulate.
+  * A ``bundle`` is the artifact that leaves the access-controlled boundary,
+    so it redacts BOTH by default (fail-safe); pass an internal bundle
+    (redact_source=redact_identity=False) only for in-boundary use. A plain
+    json/csv retains URLs by default (provenance) unless redact_source is set.
 
 EXIF sidecars are stored on disk but their payloads are not inlined into the
-manifest; only the sidecar file's hash is listed.
+manifest; only the sidecar file's hash is listed. Derived ``.info.json`` /
+``.exif.json`` sidecars are withheld from a bundle unless include_sensitive.
 """
 
 from __future__ import annotations
@@ -61,6 +67,7 @@ def build_manifest(
     since: str | None = None,
     include_sensitive: bool = False,
     redact_source: bool = False,
+    redact_identity: bool = False,
 ) -> dict:
     where, params = _since_clause(since)
     item_rows = conn.execute(
@@ -98,7 +105,7 @@ def build_manifest(
         ]
         verifications = [
             {
-                "verifier": v["verifier"],
+                "verifier": None if redact_identity else v["verifier"],
                 "verified_ts": v["verified_ts"],
                 "verdict": v["verdict"],
                 "method": v["method"],
@@ -119,7 +126,7 @@ def build_manifest(
         entry = {
             "id": iid,
             "ingest_ts": it["ingest_ts"],
-            "ingested_by": it["ingested_by"],
+            "ingested_by": None if redact_identity else it["ingested_by"],
             "source_url": None if redact_source else it["source_url"],
             "source_kind": it["source_kind"],
             "platform": it["platform"],
@@ -152,10 +159,11 @@ def build_manifest(
         "manifest_version": 1,
         "tool": "rescue-archiving",
         "generated_ts": db.utcnow(),
-        "generated_by": cfg.operator,
+        "generated_by": None if redact_identity else cfg.operator,
         "filters": {"since": since},
         "redactions": {
             "source_urls_redacted": redact_source,
+            "identities_redacted": redact_identity,
             "sensitive_included": include_sensitive,
         },
         "item_count": len(items),
@@ -164,10 +172,12 @@ def build_manifest(
 
 
 def export_json(conn, cfg, *, since=None, include_sensitive=False,
-                redact_source=False, out: Path | None = None) -> Path:
+                redact_source=False, redact_identity=False,
+                out: Path | None = None) -> Path:
     manifest = build_manifest(conn, cfg, since=since,
                               include_sensitive=include_sensitive,
-                              redact_source=redact_source)
+                              redact_source=redact_source,
+                              redact_identity=redact_identity)
     out = out or (cfg.exports_dir / f"manifest_{_fname_stamp()}.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
@@ -213,19 +223,25 @@ def export_csv(conn, cfg, *, since=None, redact_source=False,
 
 
 def export_bundle(conn, cfg, *, since=None, include_sensitive=False,
-                  redact_source=False, include_media=True,
+                  redact_source=True, redact_identity=True, include_media=True,
                   out: Path | None = None) -> Path:
     """Produce a self-contained bundle directory under exports/.
 
     Contents: manifest.json, manifest.csv, SHA256SUMS (over copied originals),
     README.txt, and (optionally) read-only copies of the originals.
+
+    Fail-safe by default: a bundle is the artifact that leaves the
+    access-controlled boundary, so source/Wayback URLs (which can name an
+    uploader) and staff identity (operator/analyst) are redacted unless the
+    caller opts into an internal bundle with redact_source=redact_identity=False.
     """
     bundle = out or (cfg.exports_dir / f"bundle_{_fname_stamp()}")
     bundle.mkdir(parents=True, exist_ok=True)
     config._chmod_quiet(bundle, config.EXPORT_DIR_MODE)
 
     export_json(conn, cfg, since=since, include_sensitive=include_sensitive,
-                redact_source=redact_source, out=bundle / "manifest.json")
+                redact_source=redact_source, redact_identity=redact_identity,
+                out=bundle / "manifest.json")
     export_csv(conn, cfg, since=since, redact_source=redact_source,
                out=bundle / "manifest.csv")
 
@@ -258,29 +274,38 @@ def export_bundle(conn, cfg, *, since=None, include_sensitive=False,
                            detail={"count": excluded_sidecars})
 
     (bundle / "README.txt").write_text(
-        _bundle_readme(redact_source, include_sensitive, excluded_sidecars))
+        _bundle_readme(redact_source, redact_identity, include_sensitive,
+                       excluded_sidecars))
     return bundle
 
 
-def _bundle_readme(redact_source: bool, include_sensitive: bool,
-                   excluded_sidecars: int = 0) -> str:
+def _bundle_readme(redact_source: bool, redact_identity: bool,
+                   include_sensitive: bool, excluded_sidecars: int = 0) -> str:
     lines = [
         "rescue-archiving export bundle",
-        "============================",
+        "==============================",
         "",
         "manifest.json  - full item/file/capture/verification manifest",
         "manifest.csv   - one row per file (flat)",
         "SHA256SUMS     - integrity checksums; verify with: shasum -c SHA256SUMS",
         "files/         - read-only copies of captured originals (if included)",
         "",
-        f"source URLs redacted : {redact_source}",
-        f"sensitive identities : {'INCLUDED (access-controlled)' if include_sensitive else 'excluded'}",
-        f"sidecars excluded    : {excluded_sidecars} (info.json / exif.json kept out;",
-        "                       their hashes remain listed in the manifest)"
-        if not include_sensitive else
-        f"sidecars included    : info.json / exif.json copied (access-controlled)",
-        "",
-        "Handle this bundle as access-controlled material. Contributor",
-        "identities are excluded unless explicitly included above.",
+        f"source / Wayback URLs : {'redacted' if redact_source else 'RETAINED (a URL can name an uploader)'}",
+        f"operator / analyst id : {'redacted' if redact_identity else 'RETAINED'}",
+        f"flagged identities    : {'INCLUDED (access-controlled)' if include_sensitive else 'excluded'}",
     ]
+    if include_sensitive:
+        lines.append("sidecars              : info.json / exif.json copied (access-controlled)")
+    else:
+        lines.append(
+            f"sidecars excluded     : {excluded_sidecars} "
+            "(info.json / exif.json kept out; their hashes remain in the manifest)")
+    lines.append("")
+    lines.append("Handle this bundle as access-controlled material.")
+    if redact_source and redact_identity and not include_sensitive:
+        lines.append("This is a circulation-safe bundle: no source URLs, no staff")
+        lines.append("identity, and no flagged contributor identities.")
+    else:
+        lines.append("WARNING: this bundle retains identifying information (see the")
+        lines.append("flags above). Treat it as internal, not for wider circulation.")
     return "\n".join(lines) + "\n"

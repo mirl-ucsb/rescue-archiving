@@ -338,3 +338,70 @@ def test_ingest_preclears_orphan_item_dir(cfg, tmp_path):
     assert "real.mp4" in names
     assert "orphan_from_failed_attempt.mp4" not in names
     assert not (cfg.item_dir(iid) / "orphan_from_failed_attempt.mp4").exists()
+
+
+# ---------------------------------------------------------------------------
+# Source-protection: fail-safe bundle (regression for the 2026-06 audit).
+# A source URL on a handle-based platform IS the uploader's identity, and a
+# bundle is the artifact that leaves the access-controlled boundary, so a
+# default bundle must redact source URLs AND staff identity (operator/analyst).
+# ---------------------------------------------------------------------------
+def _seed_identifying_item(cfg, *, handle="URLHANDLE_CANARY",
+                           operator="OP_CANARY", analyst="ANALYST_CANARY"):
+    """One URL item whose source_url + wayback_url carry a handle, plus
+    operator and analyst identity, mirroring a real handle-platform capture."""
+    src_url = f"https://x.com/{handle}/status/9"
+    with db.connect(cfg) as conn:
+        iid = db.insert_item(
+            conn, ingested_by=operator, source_url=src_url, source_kind="url",
+            platform="x", claimed_location="Khiam", claimed_datetime=None,
+            description=None, tags=None, graphic_flag=False)
+        db.add_capture_row(conn, item_id=iid, method="wayback",
+                           wayback_url=f"https://web.archive.org/web/2026/{src_url}",
+                           status="ok")
+        db.add_verification_row(conn, item_id=iid, verifier=analyst,
+                                verdict="confirmed", method="geolocation", notes=None)
+    return iid
+
+
+def test_bundle_is_circulation_safe_by_default(cfg):
+    """F1/F2 regression: a default bundle carries no source URL and no staff id."""
+    _seed_identifying_item(cfg)
+    with db.connect(cfg) as conn:
+        bundle = export.export_bundle(conn, cfg)
+    blob = (bundle / "manifest.json").read_text() + (bundle / "manifest.csv").read_text()
+    for token in ("URLHANDLE_CANARY", "OP_CANARY", "ANALYST_CANARY"):
+        assert token not in blob, f"{token} leaked into a default bundle"
+    manifest = json.loads((bundle / "manifest.json").read_text())
+    assert manifest["redactions"]["source_urls_redacted"] is True
+    assert manifest["redactions"]["identities_redacted"] is True
+    assert manifest["generated_by"] is None
+    assert manifest["items"][0]["ingested_by"] is None
+    assert "circulation-safe" in (bundle / "README.txt").read_text()
+
+
+def test_internal_bundle_retains_identifiers(cfg):
+    """The --internal opt-out retains URLs + staff identity for in-boundary use."""
+    _seed_identifying_item(cfg)
+    with db.connect(cfg) as conn:
+        bundle = export.export_bundle(conn, cfg, redact_source=False,
+                                      redact_identity=False,
+                                      out=cfg.exports_dir / "internal")
+    blob = (bundle / "manifest.json").read_text()
+    for token in ("URLHANDLE_CANARY", "OP_CANARY", "ANALYST_CANARY"):
+        assert token in blob
+    assert "WARNING" in (bundle / "README.txt").read_text()
+
+
+def test_json_redact_source_also_strips_identity(cfg):
+    """--redact-source (json path) strips staff identity as well as URLs;
+    the non-identifying verdict is kept while the analyst name is dropped."""
+    _seed_identifying_item(cfg)
+    with db.connect(cfg) as conn:
+        manifest = export.build_manifest(conn, cfg, redact_source=True,
+                                         redact_identity=True)
+    blob = json.dumps(manifest)
+    for token in ("URLHANDLE_CANARY", "OP_CANARY", "ANALYST_CANARY"):
+        assert token not in blob
+    assert manifest["items"][0]["verification_status"] == "confirmed"
+    assert manifest["items"][0]["verifications"][0]["verifier"] is None
