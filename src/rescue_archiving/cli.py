@@ -95,9 +95,19 @@ def doctor() -> None:
     missing = [n for n, c in config.capabilities().items() if not c.available]
     if missing:
         _echo()
-        _echo("Missing tools degrade gracefully; affected steps are skipped and")
-        _echo("recorded in the custody log. Install for full capability:")
-        _echo(f"  {', '.join(missing)}")
+        _echo("Missing tools degrade gracefully: the step is skipped and the skip is")
+        _echo("logged to custody, so a silent skip is not coverage. For full capability:")
+        _echo(f"  missing : {', '.join(missing)}")
+        _echo('  python  : pip install -e ".[media]"   (pHash + EXIF libraries)')
+        _echo("  binaries: gallery-dl, exiftool, archivebox via your package manager")
+    yd = config.capabilities().get("yt-dlp")
+    if yd and yd.available:
+        age = config.ytdlp_age_days(yd.version)
+        if age is not None and age > config.YTDLP_STALE_DAYS:
+            _echo()
+            _echo(f"WARNING: yt-dlp is {age} days old. Platforms change their delivery")
+            _echo("often, and a stale build is the most likely silent break in web capture.")
+            _echo("Update it (pip install -U yt-dlp, or brew upgrade yt-dlp).")
 
 
 # ---------------------------------------------------------------------------

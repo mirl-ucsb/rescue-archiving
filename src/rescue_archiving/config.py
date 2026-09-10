@@ -22,6 +22,7 @@ import os
 import shutil
 import subprocess
 from dataclasses import dataclass
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 
@@ -35,6 +36,27 @@ EXPORT_DIR_MODE = 0o700
 
 # External tools we know how to drive. Order is display order.
 KNOWN_TOOLS = ("yt-dlp", "gallery-dl", "ffmpeg", "ffprobe", "exiftool", "archivebox")
+
+# yt-dlp versions are date-stamped (YYYY.MM.DD). Platforms change their delivery
+# often, so a stale build is the most likely silent break in web capture; doctor
+# warns once the installed build is older than this.
+YTDLP_STALE_DAYS = 90
+
+
+def ytdlp_age_days(version: str | None) -> int | None:
+    """Days since a date-stamped yt-dlp version, or None if it cannot be parsed.
+
+    Tolerates a nightly suffix (``2025.11.12.232914``) by reading only the
+    first three fields.
+    """
+    if not version:
+        return None
+    try:
+        y, m, d = (int(p) for p in version.strip().split(".")[:3])
+        built = date(y, m, d)
+    except (ValueError, TypeError):
+        return None
+    return (date.today() - built).days
 
 
 def _env_path(var: str, default: Path) -> Path:

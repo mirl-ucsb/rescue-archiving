@@ -150,7 +150,7 @@ def build_manifest(
                 {"uploader_handle": srow["uploader_handle"],
                  "contributor_note": srow["contributor_note"],
                  "recorded_ts": srow["recorded_ts"],
-                 "recorded_by": srow["recorded_by"]}
+                 "recorded_by": None if redact_identity else srow["recorded_by"]}
                 if srow else None
             )
         items.append(entry)

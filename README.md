@@ -608,17 +608,30 @@ and developers.
 
 ### External tools (all optional, detected at runtime)
 
-| Tool        | Used for                          | Required? |
-|-------------|-----------------------------------|-----------|
-| yt-dlp      | video / post download + info JSON | for video URLs |
-| gallery-dl  | image-set download                | for image-set URLs |
-| ffmpeg      | video keyframe extraction         | for keyframes |
-| exiftool    | EXIF extraction (via PyExifTool)  | for EXIF |
-| archivebox  | WARC page snapshot                | optional, off by default |
+| Tool / library        | Used for                               | If missing |
+|-----------------------|----------------------------------------|------------|
+| yt-dlp                | video / post download + info JSON      | no video URL capture |
+| gallery-dl            | image-set download                     | no image-set URL capture |
+| ffmpeg / ffprobe      | video keyframe extraction              | no keyframes |
+| exiftool + PyExifTool | EXIF extraction                        | no EXIF sidecars |
+| imagehash + Pillow    | perceptual hash (near-duplicate links) | exact SHA-256 dedup only |
+| archivebox            | WARC page snapshot                     | off by default anyway |
 
 When a tool is missing, the affected step is skipped and the skip is recorded in
-the custody log. The core path (ingest, SHA-256, custody, export) needs no
-external tools at all.
+the custody log. **A silent skip is not coverage:** run `doctor` to see exactly
+what is available, and do not assume near-duplicate or EXIF results exist unless
+their libraries are installed. The Python libraries come from one extra:
+
+```bash
+pip install -e ".[media]"
+```
+
+The binaries (gallery-dl, exiftool, archivebox) come from your package manager.
+The core path (ingest, SHA-256, custody, export) needs no external tools at all.
+
+**Keep yt-dlp current.** Its versions are date-stamped, platforms change their
+delivery often, and a stale build is the most likely silent break in web capture.
+`doctor` warns when the installed build is more than 90 days old.
 
 ### Status
 

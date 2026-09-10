@@ -405,3 +405,37 @@ def test_json_redact_source_also_strips_identity(cfg):
         assert token not in blob
     assert manifest["items"][0]["verification_status"] == "confirmed"
     assert manifest["items"][0]["verifications"][0]["verifier"] is None
+
+
+# ---------------------------------------------------------------------------
+# 0.2.1 hardening (from the beta run).
+# ---------------------------------------------------------------------------
+def test_ytdlp_staleness_helper():
+    """Date-stamped yt-dlp versions yield an age in days; junk yields None."""
+    from datetime import date, timedelta
+    today = date.today()
+    assert config.ytdlp_age_days(today.strftime("%Y.%m.%d")) in (0, 1)
+    old = (today - timedelta(days=200)).strftime("%Y.%m.%d")
+    assert config.ytdlp_age_days(old) in (200, 201)
+    assert config.ytdlp_age_days("2025.11.12.232914") is not None  # nightly suffix
+    assert config.ytdlp_age_days(None) is None
+    assert config.ytdlp_age_days("not-a-version") is None
+    assert config.ytdlp_age_days("2025.13") is None                 # too few / invalid
+
+
+def test_include_sensitive_respects_identity_redaction(cfg):
+    """recorded_by is staff identity and must honour redact_identity even inside
+    the deliberately disclosed sensitive block; the disclosure itself still works."""
+    with db.connect(cfg) as conn:
+        iid = db.insert_item(
+            conn, ingested_by="OP_CANARY", source_url=None, source_kind="file",
+            platform="local-file", claimed_location=None, claimed_datetime=None,
+            description=None, tags=None, graphic_flag=False)
+        db.set_sensitive(conn, item_id=iid, uploader_handle="FLAGGED_HANDLE",
+                         contributor_note=None, recorded_by="OP_CANARY")
+        manifest = export.build_manifest(conn, cfg, include_sensitive=True,
+                                         redact_identity=True)
+    sens = manifest["items"][0]["sensitive"]
+    assert sens["uploader_handle"] == "FLAGGED_HANDLE"   # disclosure still works
+    assert sens["recorded_by"] is None                    # staff identity redacted
+    assert "OP_CANARY" not in json.dumps(manifest)
