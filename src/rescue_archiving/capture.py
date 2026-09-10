@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
-from . import config, db, hashing, metadata, timestamp
+from . import config, db, hashing, metadata, ots, timestamp
 
 # A single operator-supplied post may legitimately hold several files (e.g. a
 # multi-image post). More than this many media originals from one ``add`` is
@@ -269,6 +269,15 @@ def ingest(
             if res["status"] == "failed":
                 summary.warnings.append(
                     f"timestamp failed for {f['path']}: {res['detail']}")
+            # Second, independent anchor: OpenTimestamps (Bitcoin). Pending
+            # until upgrade-stamps completes it; skipped if the client is absent.
+            ores = ots.stamp_file(conn, cfg, item_id=item_id,
+                                  path=cfg.data_dir / f["path"],
+                                  sha256_hex=f["sha256"], actor=actor)
+            summary.stamps.append(ores)
+            if ores["status"] == "failed":
+                summary.warnings.append(
+                    f"opentimestamps failed for {f['path']}: {ores['detail']}")
 
     # --- 3. Derived provenance: EXIF sidecars + video keyframes ----------
     for path in saved:

@@ -4,4 +4,4 @@ Human-in-the-loop preservation of operator-supplied citizen documentation
 with verifiable provenance. See README.md for guardrails and usage.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

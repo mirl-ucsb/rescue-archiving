@@ -95,6 +95,9 @@ class Config:
     timestamp_enabled: bool = True
     tsa_url: str = DEFAULT_TSA_URL
     tsa_timeout: int = 30
+    # OpenTimestamps, the trustless second anchor: on by default, skipped
+    # gracefully unless the optional [ots] extra is installed. RESCUE_ARCHIVING_OTS=0 off.
+    ots_enabled: bool = True
 
     @property
     def db_path(self) -> Path:
@@ -149,6 +152,7 @@ def get_config() -> Config:
     archivebox = os.environ.get("RESCUE_ARCHIVING_ARCHIVEBOX", "0").lower() in ("1", "true", "yes")
     timestamp = os.environ.get("RESCUE_ARCHIVING_TIMESTAMP", "1").lower() not in ("0", "false", "no")
     tsa_url = os.environ.get("RESCUE_ARCHIVING_TSA_URL") or DEFAULT_TSA_URL
+    ots = os.environ.get("RESCUE_ARCHIVING_OTS", "1").lower() not in ("0", "false", "no")
     return Config(
         root=root,
         data_dir=data_dir,
@@ -158,6 +162,7 @@ def get_config() -> Config:
         archivebox_enabled=archivebox,
         timestamp_enabled=timestamp,
         tsa_url=tsa_url,
+        ots_enabled=ots,
     )
 
 
@@ -205,6 +210,7 @@ def capabilities() -> dict[str, Capability]:
     caps["imagehash"] = Capability("imagehash", *_pylib("imagehash"))
     caps["Pillow"] = Capability("Pillow", *_pylib("PIL"))
     caps["pyexiftool"] = Capability("pyexiftool", *_pylib("exiftool"))
+    caps["opentimestamps"] = Capability("opentimestamps", *_pylib("opentimestamps"))
     return caps
 
 
@@ -213,7 +219,15 @@ def _pylib(module: str) -> tuple[str | None, str | None]:
         mod = __import__(module)
     except Exception:
         return (None, None)
-    return (module, getattr(mod, "__version__", "unknown"))
+    version = getattr(mod, "__version__", None)
+    if not version:
+        # Some libraries only declare their version in package metadata.
+        try:
+            from importlib.metadata import version as _dist_version
+            version = _dist_version(module)
+        except Exception:
+            version = "unknown"
+    return (module, version)
 
 
 def has(tool: str) -> bool:

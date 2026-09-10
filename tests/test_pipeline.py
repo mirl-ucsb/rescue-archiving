@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from rescue_archiving import (capture, config, db, dedup, export, hashing, metadata,
-                              timestamp)
+                              ots, timestamp)
 
 
 @pytest.fixture()
@@ -28,6 +28,7 @@ def cfg(tmp_path: Path) -> config.Config:
         wayback_enabled=False,  # never hit the network in tests
         archivebox_enabled=False,
         timestamp_enabled=False,  # RFC 3161 needs a TSA; stamp tests enable it with mocks
+        ots_enabled=False,        # OpenTimestamps needs calendars; likewise mocked
     )
     db.init_db(c)
     return c
@@ -586,3 +587,174 @@ def test_verify_stamp_detects_tamper(cfg, tmp_path, monkeypatch):
     original.write_bytes(b"altered evidence")
     bad = timestamp.verify_stamp(scfg, meta_path)
     assert bad["ok"] is False and "no longer match" in bad["reason"]
+
+
+# ---------------------------------------------------------------------------
+# OpenTimestamps (0.4.0). Network-free: the ots CLI and the block explorers are
+# stood in; proofs are synthesised with the real library so parsing is genuine.
+# ---------------------------------------------------------------------------
+BLOCK = 358391
+
+
+def _ots_proof(digest: bytes, *, complete: bool) -> bytes:
+    """A structurally valid detached proof for ``digest``: pending (calendar
+    attestation) or complete (Bitcoin block attestation on the digest itself)."""
+    pytest.importorskip("opentimestamps")
+    from opentimestamps.core.notary import (BitcoinBlockHeaderAttestation,
+                                            PendingAttestation)
+    from opentimestamps.core.op import OpSHA256
+    from opentimestamps.core.serialize import BytesSerializationContext
+    from opentimestamps.core.timestamp import DetachedTimestampFile, Timestamp
+    ts = Timestamp(digest)
+    ts.attestations.add(BitcoinBlockHeaderAttestation(BLOCK) if complete
+                        else PendingAttestation("https://calendar.test"))
+    ctx = BytesSerializationContext()
+    DetachedTimestampFile(OpSHA256(), ts).serialize(ctx)
+    return ctx.getbytes()
+
+
+def _fake_ots(monkeypatch, *, fail=False, upgrade_completes=False):
+    """Stand in for the ots CLI: stamp writes a pending proof beside the file;
+    upgrade optionally rewrites the (temp) proof as complete."""
+    import hashlib
+    pytest.importorskip("opentimestamps")
+    monkeypatch.setattr(ots, "available", lambda: True)
+    monkeypatch.setattr(config, "has", lambda tool: tool == "opentimestamps")
+    monkeypatch.setattr(config, "tool_version", lambda tool: "test")
+
+    def run(args, timeout=120):
+        if fail:
+            return (1, "simulated calendar failure")
+        cmd, target = args[0], Path(args[1])
+        if cmd == "stamp":
+            digest = hashlib.sha256(target.read_bytes()).digest()
+            target.with_name(target.name + ".ots").write_bytes(_ots_proof(digest, complete=False))
+        elif cmd == "upgrade" and upgrade_completes:
+            digest = bytes.fromhex(ots.inspect(target.read_bytes())["file_digest"])
+            target.write_bytes(_ots_proof(digest, complete=True))
+        return (0, "ok")
+    monkeypatch.setattr(ots, "_run_ots", run)
+
+
+def _fake_explorers(monkeypatch, *, agree=True, unreachable=False):
+    """Stand in for the two block explorers. A complete synthetic proof commits
+    the file digest itself, so the 'block' merkle root is that digest reversed."""
+    import binascii
+
+    def fetch(base, height, timeout=20):
+        if unreachable:
+            raise ConnectionError("offline")
+        # Recover the expected root from the proof under test via a closure set by the test.
+        root = fetch.expected_root if agree else "00" * 32
+        return {"merkle_root": root, "timestamp": 1432827678}
+    fetch.expected_root = None
+    monkeypatch.setattr(ots, "_fetch_block", fetch)
+    return fetch
+
+
+def _ots_cfg(cfg):
+    return dataclasses.replace(cfg, ots_enabled=True)
+
+
+def test_ots_stamp_registers_pending_proof(cfg, tmp_path, monkeypatch):
+    _fake_ots(monkeypatch)
+    ocfg = _ots_cfg(cfg)
+    iid, summary = _ingest_file(ocfg, _make_file(tmp_path / "clip.mp4", b"evidence"))
+    with db.connect(ocfg) as conn:
+        proofs = [f for f in db.get_files(conn, iid) if f["role"] == "proof"]
+        cap = conn.execute("SELECT * FROM captures WHERE item_id=? AND method='ots'",
+                           (iid,)).fetchone()
+        log = [r["action"] for r in conn.execute(
+            "SELECT action FROM custody_log WHERE item_id=?", (iid,)).fetchall()]
+    res = [s for s in summary.stamps if s.get("method") == "ots"][0]
+    assert res["status"] == "ok" and res["state"] == "pending"
+    assert [Path(f["path"]).name for f in proofs] == ["clip.mp4.ots"]
+    mode = stat.S_IMODE(os.stat(ocfg.data_dir / proofs[0]["path"]).st_mode)
+    assert not (mode & stat.S_IWUSR)                    # frozen like an original
+    assert cap["status"] == "pending" and "calendar.test" in cap["detail"]
+    assert "ots_pending" in log
+
+
+def test_ots_upgrade_writes_complete_proof_without_touching_pending(cfg, tmp_path, monkeypatch):
+    _fake_ots(monkeypatch, upgrade_completes=True)
+    _fake_explorers(monkeypatch, unreachable=True)     # block time is best-effort only
+    ocfg = _ots_cfg(cfg)
+    iid, _ = _ingest_file(ocfg, _make_file(tmp_path / "clip.mp4", b"evidence"))
+    with db.connect(ocfg) as conn:
+        pending = ocfg.data_dir / ots.list_pending_proofs(conn, iid)[0]["path"]
+        before = hashing.sha256_file(pending)
+        res = ots.upgrade_proof(conn, ocfg, item_id=iid, pending_path=pending, actor="t")
+        proofs = sorted(Path(f["path"]).name for f in db.get_files(conn, iid)
+                        if f["role"] == "proof")
+        caps = conn.execute("SELECT status FROM captures WHERE item_id=? AND method='ots' "
+                            "ORDER BY id", (iid,)).fetchall()
+        log = [r["action"] for r in conn.execute(
+            "SELECT action FROM custody_log WHERE item_id=?", (iid,)).fetchall()]
+    assert res["changed"] is True and res["state"] == "complete"
+    assert proofs == ["clip.mp4.bitcoin.ots", "clip.mp4.ots"]   # new file, pending kept
+    assert hashing.sha256_file(pending) == before                # pending untouched
+    assert [c["status"] for c in caps] == ["pending", "ok"]
+    assert "ots_upgraded" in log
+    # Running again is a no-op.
+    with db.connect(ocfg) as conn:
+        again = ots.upgrade_proof(conn, ocfg, item_id=iid, pending_path=pending, actor="t")
+    assert again["changed"] is False and again["state"] == "complete"
+
+
+def test_ots_verify_states_and_tamper(cfg, tmp_path, monkeypatch):
+    import binascii, hashlib
+    _fake_ots(monkeypatch, upgrade_completes=True)
+    fetch = _fake_explorers(monkeypatch, agree=True)
+    ocfg = _ots_cfg(cfg)
+    payload = b"original evidence"
+    iid, _ = _ingest_file(ocfg, _make_file(tmp_path / "clip.mp4", payload))
+    with db.connect(ocfg) as conn:
+        pending = ocfg.data_dir / ots.list_pending_proofs(conn, iid)[0]["path"]
+    # 1. Pending: verified as far as it can be, not a failure.
+    assert ots.verify_proof(ocfg, pending)["status"] == "pending"
+    # 2. Complete + both explorers agree -> ok.
+    with db.connect(ocfg) as conn:
+        ots.upgrade_proof(conn, ocfg, item_id=iid, pending_path=pending, actor="t")
+    fetch.expected_root = binascii.hexlify(hashlib.sha256(payload).digest()[::-1]).decode()
+    good = ots.verify_proof(ocfg, pending)
+    assert good["status"] == "ok" and good["block_height"] == BLOCK
+    assert "blockstream.info" in good["detail"] and "mempool.space" in good["detail"]
+    # 3. --offline never contacts explorers and reports unconfirmed.
+    assert ots.verify_proof(ocfg, pending, offline=True)["status"] == "unconfirmed"
+    # 4. An explorer disagreeing on the merkle root is invalid.
+    _fake_explorers(monkeypatch, agree=False)
+    assert ots.verify_proof(ocfg, pending)["status"] == "invalid"
+    # 5. Tampered bytes fail offline, before any explorer is consulted.
+    original = ocfg.data_dir / good["file"]
+    os.chmod(original, 0o644)
+    original.write_bytes(b"altered evidence")
+    bad = ots.verify_proof(ocfg, pending, offline=True)
+    assert bad["status"] == "invalid" and "no longer match" in bad["reason"]
+
+
+def test_ots_skipped_when_client_absent(cfg, tmp_path, monkeypatch):
+    pytest.importorskip("opentimestamps")
+    monkeypatch.setattr(ots, "available", lambda: False)
+    ocfg = _ots_cfg(cfg)
+    iid, summary = _ingest_file(ocfg, _make_file(tmp_path / "doc.txt", b"x"))
+    with db.connect(ocfg) as conn:
+        proofs = conn.execute("SELECT COUNT(*) FROM files WHERE item_id=? AND role='proof'",
+                              (iid,)).fetchone()[0]
+        log = [r["action"] for r in conn.execute(
+            "SELECT action FROM custody_log WHERE item_id=?", (iid,)).fetchall()]
+    res = [s for s in summary.stamps if s.get("method") == "ots"][0]
+    assert res["status"] == "skipped" and proofs == 0 and "ots_skipped" in log
+
+
+def test_ots_failure_is_recorded_not_fatal(cfg, tmp_path, monkeypatch):
+    _fake_ots(monkeypatch, fail=True)
+    ocfg = _ots_cfg(cfg)
+    iid, summary = _ingest_file(ocfg, _make_file(tmp_path / "clip.mp4", b"bytes"))
+    with db.connect(ocfg) as conn:
+        cap = conn.execute("SELECT status FROM captures WHERE item_id=? AND method='ots'",
+                           (iid,)).fetchone()
+        log = [r["action"] for r in conn.execute(
+            "SELECT action FROM custody_log WHERE item_id=?", (iid,)).fetchall()]
+    assert summary.files                                   # ingest still succeeded
+    assert cap["status"] == "failed" and "ots_failed" in log
+    assert any("opentimestamps failed" in w for w in summary.warnings)

@@ -531,10 +531,47 @@ store; set `RESCUE_ARCHIVING_TSA_URL` to use another (for example
 `https://freetsa.org/tsr`, which is self-rooted and verifies from its own
 embedded chain).
 
+### The second anchor: OpenTimestamps
+
+An RFC 3161 proof relies on the authority having signed truthfully. So each
+file also gets an **OpenTimestamps** proof, which commits the digest into the
+Bitcoin blockchain through public calendar servers: once complete, anyone can
+verify it against public block headers with no authority to trust at all. The
+two anchors fail independently. The client adds its own random nonce before
+anything reaches a calendar, so, as with RFC 3161, no file hash ever leaves
+your machine.
+
+It needs one optional package:
+
+```bash
+pip install -e ".[ots]"
+```
+
+A fresh proof (`<file>.ots`) is *pending*: the calendars have accepted it and
+will commit it in a coming Bitcoin block, usually within hours. Later, run
+
+```bash
+rescue-archiving upgrade-stamps       # fetch the Bitcoin attestation for pending proofs
+```
+
+A completed proof is written as a **new** file, `<file>.bitcoin.ots`, beside
+the untouched pending one; nothing already frozen is ever rewritten, so `check`
+stays truthful. `verify-stamps` then reports each proof as `ok`, `pending`,
+`unconfirmed`, or `invalid`. For a completed proof it does a *light
+verification* that needs no Bitcoin node: it reads the attested block from the
+proof and confirms its merkle root against two independent public explorers
+(blockstream.info and mempool.space), which must agree. `--offline` skips that
+check. Anyone holding the `.ots` file can also verify it fully, trustlessly,
+with the standard `ots` tool and a Bitcoin node. `add --no-ots` skips one
+proof; `RESCUE_ARCHIVING_OTS=0` turns them off; if the package is absent the
+step is skipped and logged.
+
 Honest limits: a timestamp proves existence at a time, not authenticity of
-content, and it relies on the authority having signed truthfully; the chain is
-stored so the proof survives the authority. A trustless second anchor
-(OpenTimestamps, on Bitcoin) is the planned complement.
+content. RFC 3161 relies on the authority having signed truthfully (its chain
+is stored so the proof survives it); the OpenTimestamps light verification
+relies on the two explorers reporting Bitcoin honestly, which a full node
+removes. Together they leave no single party able to backdate or erase a
+capture.
 
 ---
 
@@ -642,12 +679,13 @@ and developers.
 |---|---|
 | `init` | Create the data tree and schema (idempotent). |
 | `doctor` | Show config paths and external-tool capabilities. |
-| `add URL\|PATH` | Ingest one item. Options: `--location --datetime --note --tags --graphic --keyframes --make-thumbnails --uploader-handle --contributor-note --operator --no-wayback --no-timestamp`. |
+| `add URL\|PATH` | Ingest one item. Options: `--location --datetime --note --tags --graphic --keyframes --make-thumbnails --uploader-handle --contributor-note --operator --no-wayback --no-timestamp --no-ots`. |
 | `list` | List items. Options: `--status --tag --since`. |
 | `show ID` | Full detail. Options: `--show-sensitive` (logged), `--log-tail`. |
 | `verify ID` | Open a verification record. Options: `--verdict --method --notes --verifier`. |
 | `check [ID]` | Recompute SHA-256 and report match / mismatch / missing. Exits non-zero on any mismatch or missing file, so it can gate scheduled integrity sweeps. |
-| `verify-stamps [ID]` | Re-verify RFC 3161 timestamp proofs: recompute each file's nonced commitment and check the authority's token binds it. Exits non-zero on any invalid stamp. |
+| `verify-stamps [ID]` | Re-verify both timestamp anchors. RFC 3161: recompute the nonced commitment and check the authority's token (offline). OpenTimestamps: check the proof's digest against the file, then light-verify a completed proof's Bitcoin block against two public explorers (`--offline` skips). Exits non-zero on any invalid proof. |
+| `upgrade-stamps [ID]` | Complete pending OpenTimestamps proofs once Bitcoin has confirmed them; writes `<file>.bitcoin.ots` beside the untouched pending proof. |
 | `dedup` | Link exact (SHA-256) and near (pHash) duplicates. Option: `--threshold`. |
 | `export` | Options: `--format json\|csv\|bundle --since --out --redact-source --internal --include-sensitive --no-media`. A bundle redacts source links and staff identity by default; `--internal` keeps them. |
 
@@ -661,7 +699,8 @@ and developers.
 | exiftool + PyExifTool | EXIF extraction                        | no EXIF sidecars |
 | imagehash + Pillow    | perceptual hash (near-duplicate links) | exact SHA-256 dedup only |
 | archivebox            | WARC page snapshot                     | off by default anyway |
-| openssl               | RFC 3161 timestamp query, reply, verify | no timestamp proofs |
+| openssl               | RFC 3161 timestamp query, reply, verify | no RFC 3161 proofs |
+| opentimestamps-client | OpenTimestamps stamp, upgrade, parse    | no Bitcoin-anchored proofs (`pip install -e ".[ots]"`) |
 
 When a tool is missing, the affected step is skipped and the skip is recorded in
 the custody log. **A silent skip is not coverage:** run `doctor` to see exactly
@@ -686,8 +725,9 @@ Milestones M1 through M5 are implemented: repo skeleton and SQLite schema with
 log (M2); the Wayback Save API, EXIF sidecars, and keyframe extraction (M3);
 perceptual hashing, dedup linking, and the verification workflow (M4); and JSON,
 CSV, and bundle export plus `check` integrity re-verification (M5). RFC 3161
-timestamp proofs and `verify-stamps` were added in 0.3.0. Cryptographic
-signing of manifests (C2PA) is intentionally out of scope for now.
+timestamp proofs and `verify-stamps` were added in 0.3.0; OpenTimestamps, the
+trustless Bitcoin-anchored second anchor, and `upgrade-stamps` in 0.4.0.
+Cryptographic signing of manifests (C2PA) is intentionally out of scope for now.
 
 ### Project guardrails
 
@@ -771,6 +811,7 @@ exports/                       # manifests, CSVs, bundles
 - `RESCUE_ARCHIVING_ARCHIVEBOX=1` - enable optional ArchiveBox WARC capture.
 - `RESCUE_ARCHIVING_TIMESTAMP=0` - disable RFC 3161 timestamp proofs (on by default).
 - `RESCUE_ARCHIVING_TSA_URL` - timestamp authority (default: DigiCert's public responder).
+- `RESCUE_ARCHIVING_OTS=0` - disable OpenTimestamps proofs (on by default; needs the `[ots]` extra).
 - `RESCUE_ARCHIVING_ROOT` - base directory if you prefer to set one root.
 
 ### Decisions (confirmed 2026-06-01)

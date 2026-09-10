@@ -81,6 +81,16 @@ def _capture_entry(c, redact_source: bool) -> dict:
         entry["attested_ts"] = d.get("gen_time")
         entry["stamped_file"] = d.get("file")
         entry["tsa"] = d.get("tsa")
+    elif c["method"] == "ots" and c["detail"]:
+        try:
+            d = json.loads(c["detail"])
+        except (ValueError, TypeError):
+            d = {}
+        entry["state"] = d.get("state")
+        entry["attested_block"] = d.get("block_height")
+        entry["attested_ts"] = d.get("block_time")
+        entry["stamped_file"] = d.get("file")
+        entry["proof"] = d.get("proof")
     return entry
 
 

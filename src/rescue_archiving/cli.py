@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 import typer
 
-from . import capture, config, db, dedup, export, hashing, timestamp
+from . import capture, config, db, dedup, export, hashing, ots, timestamp
 
 app = typer.Typer(
     add_completion=False,
@@ -30,7 +30,7 @@ app = typer.Typer(
 # ---------------------------------------------------------------------------
 def _effective_cfg(operator: str | None = None, no_wayback: bool = False,
                    archivebox: bool | None = None,
-                   no_timestamp: bool = False) -> config.Config:
+                   no_timestamp: bool = False, no_ots: bool = False) -> config.Config:
     cfg = config.get_config()
     changes: dict = {}
     if operator:
@@ -39,6 +39,8 @@ def _effective_cfg(operator: str | None = None, no_wayback: bool = False,
         changes["wayback_enabled"] = False
     if no_timestamp:
         changes["timestamp_enabled"] = False
+    if no_ots:
+        changes["ots_enabled"] = False
     if archivebox is not None:
         changes["archivebox_enabled"] = archivebox
     return dataclasses.replace(cfg, **changes) if changes else cfg
@@ -92,6 +94,9 @@ def doctor() -> None:
     _echo(f"  archivebox      : {cfg.archivebox_enabled}")
     _echo(f"  timestamp (TSA) : {cfg.timestamp_enabled}"
           + (f"  {cfg.tsa_url}" if cfg.timestamp_enabled else ""))
+    _echo(f"  opentimestamps  : {cfg.ots_enabled}"
+          + ("" if ots.available() or not cfg.ots_enabled
+             else "  (client not installed: pip install -e \".[ots]\")"))
     _echo()
     _echo(_bold("Capabilities"))
     for name, cap in config.capabilities().items():
@@ -140,11 +145,13 @@ def add(
     no_wayback: bool = typer.Option(False, "--no-wayback", help="Skip the Wayback snapshot."),
     no_timestamp: bool = typer.Option(False, "--no-timestamp",
                                       help="Skip the RFC 3161 timestamp proof."),
+    no_ots: bool = typer.Option(False, "--no-ots",
+                                help="Skip the OpenTimestamps (Bitcoin) proof."),
 ) -> None:
     """Ingest one operator-supplied item: capture, snapshot, hash, stamp, log."""
     kind = _classify_target(target)
     cfg = _effective_cfg(operator=operator, no_wayback=no_wayback,
-                         no_timestamp=no_timestamp)
+                         no_timestamp=no_timestamp, no_ots=no_ots)
     db.init_db(cfg)
     actor = cfg.operator
 
@@ -196,7 +203,11 @@ def add(
     for f in summary.files:
         _echo(f"  {f['role']:8s} {f['media_type']:6s} {f['sha256'][:16]}...  {f['path']}")
     for s in summary.stamps:
-        if s["status"] == "ok":
+        if s["status"] != "ok":
+            continue
+        if s.get("method") == "ots":
+            _echo(f"  stamp    ots      {s['state']} ({s['detail']})  {s['file']}")
+        else:
             _echo(f"  stamp    rfc3161  attested {s['gen_time']}  {s['file']}")
     if kind == "url":
         wb = summary.wayback_url or "(none - see custody log)"
@@ -285,11 +296,17 @@ def show(
             _echo(_bold(f"\n  Captures ({len(caps)})"))
             for c in caps:
                 extra = c["wayback_url"] or c["warc_path"] or ""
-                if c["method"] == "rfc3161" and c["detail"]:
+                if c["method"] in ("rfc3161", "ots") and c["detail"]:
                     try:
                         d = json.loads(c["detail"])
-                        extra = (f"attested {d.get('gen_time')}  {d.get('file')}"
-                                 if c["status"] == "ok" else d.get("error", ""))
+                        if c["status"] == "failed":
+                            extra = d.get("error", "")
+                        elif c["method"] == "ots":
+                            extra = (f"bitcoin block {d.get('block_height')}  {d.get('file')}"
+                                     if d.get("state") == "complete"
+                                     else f"pending ({len(d.get('calendars', []))} calendars)  {d.get('file')}")
+                        else:
+                            extra = f"attested {d.get('gen_time')}  {d.get('file')}"
                     except ValueError:
                         pass
                 _echo(f"    {c['method']:12} {c['status']:8} {c['capture_ts']}  {extra}")
@@ -413,37 +430,89 @@ def check(
 @app.command("verify-stamps")
 def verify_stamps_cmd(
     item_id: int = typer.Argument(None, help="Item id, or omit to verify every stamp."),
+    offline: bool = typer.Option(
+        False, "--offline",
+        help="Skip the public block-explorer check for OpenTimestamps proofs."),
 ) -> None:
-    """Re-verify RFC 3161 timestamp proofs.
+    """Re-verify timestamp proofs, both anchors.
 
-    For each proof, recompute the file's nonced commitment from its current
-    bytes and check the TSA token binds it. Exits non-zero on any invalid stamp.
+    RFC 3161: recompute the file's nonced commitment and check the authority's
+    token binds it (offline). OpenTimestamps: check the proof's digest against
+    the file, then light-verify a completed proof's Bitcoin block against two
+    independent public explorers. Exits non-zero on any invalid proof.
     """
     cfg = config.get_config()
     db.init_db(cfg)
-    ok = bad = 0
+    counts = {"ok": 0, "pending": 0, "unconfirmed": 0, "invalid": 0}
+    labels = {"ok": "OK       ", "pending": "PENDING  ",
+              "unconfirmed": "UNCONFIRM", "invalid": "INVALID  "}
     with db.connect(cfg) as conn:
-        rows = timestamp.list_stamp_metas(conn, item_id)
-        if not rows:
+        rfc = timestamp.list_stamp_metas(conn, item_id)
+        pend = ots.list_pending_proofs(conn, item_id)
+        if not rfc and not pend:
             _echo("No timestamp proofs found"
                   + ("." if item_id is None else f" for item #{item_id}."))
             return
-        for r in rows:
+        for r in rfc:
             res = timestamp.verify_stamp(cfg, cfg.data_dir / r["path"])
-            if res["ok"]:
-                ok += 1
-                _echo(f"  OK       #{r['item_id']} {res['file']}  attested "
-                      f"{res.get('gen_time')}  via {res.get('trust_path')}")
-            else:
-                bad += 1
-                _echo(f"  INVALID  #{r['item_id']} {res['file']}  {res['reason']}")
+            status = "ok" if res["ok"] else "invalid"
+            counts[status] += 1
+            what = (f"attested {res.get('gen_time')}  via {res.get('trust_path')}"
+                    if res["ok"] else res["reason"])
+            _echo(f"  {labels[status]} rfc3161  #{r['item_id']} {res['file']}  {what}")
             db.log_custody(conn, item_id=r["item_id"], actor=cfg.operator,
                            action="stamp_verified" if res["ok"] else "stamp_invalid",
-                           detail={"file": res["file"], "reason": res.get("reason"),
+                           detail={"method": "rfc3161", "file": res["file"],
+                                   "reason": res.get("reason"),
                                    "trust_path": res.get("trust_path")})
-    _echo(f"\nVerified {ok + bad} stamps: {_bold(str(ok))} ok, {bad} invalid.")
-    if bad:
+        for r in pend:
+            res = ots.verify_proof(cfg, cfg.data_dir / r["path"], offline=offline)
+            counts[res["status"]] += 1
+            _echo(f"  {labels[res['status']]} ots      #{r['item_id']} {res['file']}  "
+                  f"{res.get('detail') or res.get('reason')}")
+            action = ("stamp_invalid" if res["status"] == "invalid"
+                      else "stamp_verified" if res["status"] == "ok" else "stamp_checked")
+            db.log_custody(conn, item_id=r["item_id"], actor=cfg.operator, action=action,
+                           detail={"method": "ots", "file": res["file"],
+                                   "status": res["status"], "reason": res.get("reason")})
+    _echo(f"\nVerified {sum(counts.values())} proofs: {_bold(str(counts['ok']))} ok, "
+          f"{counts['pending']} pending, {counts['unconfirmed']} unconfirmed, "
+          f"{counts['invalid']} invalid.")
+    if counts["invalid"]:
         raise typer.Exit(code=1)
+
+
+@app.command("upgrade-stamps")
+def upgrade_stamps_cmd(
+    item_id: int = typer.Argument(None, help="Item id, or omit for every pending proof."),
+) -> None:
+    """Complete pending OpenTimestamps proofs once Bitcoin has confirmed them.
+
+    Contacts the calendars. A completed proof is written as a new file beside
+    the pending one; nothing already registered is rewritten.
+    """
+    cfg = config.get_config()
+    db.init_db(cfg)
+    done = still = 0
+    with db.connect(cfg) as conn:
+        rows = ots.list_pending_proofs(conn, item_id)
+        if not rows:
+            _echo("No OpenTimestamps proofs found.")
+            return
+        for r in rows:
+            res = ots.upgrade_proof(conn, cfg, item_id=r["item_id"],
+                                    pending_path=cfg.data_dir / r["path"],
+                                    actor=cfg.operator)
+            if res["changed"]:
+                done += 1
+                _echo(f"  COMPLETE #{r['item_id']} {res['file']}  {res['detail']}")
+            elif res["state"] == "complete":
+                _echo(f"  complete #{r['item_id']} {res['file']}  (already)")
+            else:
+                still += 1
+                _echo(f"  pending  #{r['item_id']} {res['file']}  {res['detail']}")
+    _echo(f"\nUpgraded {done}; {still} still pending "
+          "(Bitcoin typically confirms within hours; run again later).")
 
 
 # ---------------------------------------------------------------------------
