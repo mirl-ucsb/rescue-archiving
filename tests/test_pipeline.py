@@ -758,3 +758,200 @@ def test_ots_failure_is_recorded_not_fatal(cfg, tmp_path, monkeypatch):
     assert summary.files                                   # ingest still succeeded
     assert cap["status"] == "failed" and "ots_failed" in log
     assert any("opentimestamps failed" in w for w in summary.warnings)
+
+
+# ---------------------------------------------------------------------------
+# 0.5.0 capture robustness: classified whole-post capture and the Wayback
+# fallback. Network-free: downloaders, the classifier, and archive.org are
+# stood in.
+# ---------------------------------------------------------------------------
+def test_single_post_allow_list_is_conservative():
+    assert capture.is_single_post(("twitter", "tweet"))
+    assert capture.is_single_post(("instagram", "post"))
+    assert capture.is_single_post(("reddit", "submission"))
+    assert capture.is_single_post(("imgur", "album"))
+    assert capture.is_single_post(("wikimediacommons", "file"))
+    assert not capture.is_single_post(("twitter", "user"))
+    assert not capture.is_single_post(("twitter", "media"))          # a user's media timeline
+    assert not capture.is_single_post(("instagram", "posts"))        # plural is a feed
+    assert not capture.is_single_post(("wikimediacommons", "category"))
+    assert not capture.is_single_post(None)
+
+
+def test_classify_url_uses_gallery_dl_matcher_offline():
+    pytest.importorskip("gallery_dl")
+    c = capture.classify_url
+    assert c("https://x.com/USER/status/12345") == ("twitter", "tweet")
+    assert c("https://x.com/USER") == ("twitter", "user")
+    assert c("https://www.instagram.com/p/abcdefg/") == ("instagram", "post")
+    assert c("https://www.reddit.com/r/SUB/comments/id/") == ("reddit", "submission")
+    assert c("https://commons.wikimedia.org/wiki/Category:X") == ("wikimediacommons", "category")
+    assert c("not a url") is None
+
+
+def _patch_gallery_dl(monkeypatch, n_files=3):
+    """No yt-dlp media, so ingest falls through to gallery-dl; record its call."""
+    seen = {}
+    monkeypatch.setattr(config, "has", lambda tool: tool in ("yt-dlp", "gallery-dl"))
+    monkeypatch.setattr(config, "tool_version", lambda tool: "test")
+    monkeypatch.setattr(capture, "_run_ytdlp", lambda url, d: (1, "no media"))
+
+    def fake(url, dest_dir, whole_post=False, cap=capture.MULTI_FILE_CAP):
+        seen["whole_post"], seen["cap"] = whole_post, cap
+        for i in range(n_files if whole_post else 1):
+            (Path(dest_dir) / f"{i + 1:04d}.jpg").write_bytes(b"\xff\xd8img" + bytes([i]))
+        return (0, "ok")
+    monkeypatch.setattr(capture, "_run_gallery_dl", fake)
+    monkeypatch.setattr(capture, "wayback_save", lambda cfg, url: (None, "skipped", "test"))
+    return seen
+
+
+def _ingest_url_item(cfg, url, **kw):
+    with db.connect(cfg) as conn:
+        iid = db.insert_item(
+            conn, ingested_by="t", source_url=url, source_kind="url", platform="x",
+            claimed_location=None, claimed_datetime=None, description=None,
+            tags=None, graphic_flag=False)
+        summary = capture.ingest(conn, cfg, item_id=iid, source=url, source_kind="url",
+                                 actor="t", graphic=False, keyframes_n=0, **kw)
+        n = conn.execute("SELECT COUNT(*) FROM files WHERE item_id=? AND role='original'",
+                         (iid,)).fetchone()[0]
+        dl = conn.execute("SELECT detail FROM custody_log WHERE item_id=? AND action='download'",
+                          (iid,)).fetchone()["detail"]
+    return iid, summary, n, json.loads(dl)
+
+
+def test_single_post_is_taken_whole_and_capped(cfg, monkeypatch):
+    seen = _patch_gallery_dl(monkeypatch, n_files=3)
+    monkeypatch.setattr(capture, "classify_url", lambda url: ("twitter", "tweet"))
+    _, summary, n, dl = _ingest_url_item(cfg, "https://x.com/USER/status/1")
+    assert seen["whole_post"] is True and seen["cap"] == cfg.multi_file_cap
+    assert n == 3 and summary.capture_mode == "whole-post"
+    assert dl["classification"] == "twitter.tweet" and dl["mode"] == "whole-post"
+    assert dl["override"] is False
+
+
+def test_feed_link_stays_at_one_item_and_says_why(cfg, monkeypatch):
+    seen = _patch_gallery_dl(monkeypatch, n_files=3)
+    monkeypatch.setattr(capture, "classify_url", lambda url: ("twitter", "user"))
+    _, summary, n, dl = _ingest_url_item(cfg, "https://x.com/USER")
+    assert seen["whole_post"] is False and n == 1
+    assert dl["classification"] == "twitter.user" and dl["mode"] == "single-item"
+    assert any("twitter.user" in w and "--whole-post" in w for w in summary.warnings)
+
+
+def test_whole_post_override_is_logged_and_still_capped(cfg, monkeypatch):
+    seen = _patch_gallery_dl(monkeypatch, n_files=3)
+    monkeypatch.setattr(capture, "classify_url", lambda url: None)   # unclassifiable
+    _, summary, n, dl = _ingest_url_item(cfg, "https://example.com/post/1", whole_post=True)
+    assert seen["whole_post"] is True and seen["cap"] == cfg.multi_file_cap and n == 3
+    assert dl["override"] is True and dl["mode"] == "whole-post"
+
+
+def test_reaching_the_cap_is_flagged(cfg, monkeypatch):
+    small = dataclasses.replace(cfg, multi_file_cap=3)
+    _patch_gallery_dl(monkeypatch, n_files=3)
+    monkeypatch.setattr(capture, "classify_url", lambda url: ("imgur", "album"))
+    iid, summary, n, _ = _ingest_url_item(small, "https://imgur.com/a/abcde")
+    with db.connect(small) as conn:
+        log = [r["action"] for r in conn.execute(
+            "SELECT action FROM custody_log WHERE item_id=?", (iid,)).fetchall()]
+    assert n == 3 and "multi_file_flag" in log
+    assert any("3-file cap" in w for w in summary.warnings)
+
+
+def test_wayback_retries_transient_failures_then_succeeds(cfg, monkeypatch):
+    monkeypatch.setattr(capture, "WAYBACK_RETRY_DELAYS", (0, 0, 0))
+    calls = []
+
+    class R:
+        def __init__(self, code, loc=None):
+            self.status_code = code
+            self.headers = {"Content-Location": loc} if loc else {}
+            self.url = "https://web.archive.org/save/x"
+
+    def get(url, **kw):
+        calls.append(url)
+        return R(429) if len(calls) < 3 else R(200, "/web/2026/https://example.com/")
+    monkeypatch.setattr("requests.get", get)
+    wb, status, _ = capture.wayback_save(dataclasses.replace(cfg, wayback_enabled=True),
+                                         "https://example.com/")
+    assert status == "ok" and wb.endswith("/web/2026/https://example.com/")
+    assert len(calls) == 3
+
+
+def test_wayback_failure_falls_back_to_an_existing_snapshot(cfg, monkeypatch):
+    monkeypatch.setattr(config, "has", lambda tool: False)   # no downloaders needed here
+    monkeypatch.setattr(capture, "wayback_save", lambda cfg, url: (None, "failed", "http 503"))
+    monkeypatch.setattr(capture, "wayback_existing", lambda cfg, url: (
+        "http://web.archive.org/web/20250101000000/https://example.com/", "20250101000000"))
+    wcfg = dataclasses.replace(cfg, wayback_enabled=True)
+    with db.connect(wcfg) as conn:
+        iid = db.insert_item(conn, ingested_by="t", source_url="https://example.com/",
+                             source_kind="url", platform="example", claimed_location=None,
+                             claimed_datetime=None, description=None, tags=None,
+                             graphic_flag=False)
+        summary = capture.ingest(conn, wcfg, item_id=iid, source="https://example.com/",
+                                 source_kind="url", actor="t", graphic=False, keyframes_n=0)
+        cap = conn.execute("SELECT * FROM captures WHERE item_id=? AND method='wayback'",
+                           (iid,)).fetchone()
+        log = [r["action"] for r in conn.execute(
+            "SELECT action FROM custody_log WHERE item_id=?", (iid,)).fetchall()]
+    assert cap["status"] == "existing" and "20250101" in cap["wayback_url"]
+    assert "wayback_existing" in log and summary.wayback_url == cap["wayback_url"]
+    assert any("earlier snapshot" in w for w in summary.warnings)
+
+
+def test_retry_snapshots_adds_a_new_record_and_keeps_history(cfg, monkeypatch):
+    monkeypatch.setattr(config, "has", lambda tool: False)
+    monkeypatch.setattr(capture, "wayback_save", lambda cfg, url: (None, "failed", "http 503"))
+    monkeypatch.setattr(capture, "wayback_existing", lambda cfg, url: (None, None))
+    wcfg = dataclasses.replace(cfg, wayback_enabled=True)
+    with db.connect(wcfg) as conn:
+        iid = db.insert_item(conn, ingested_by="t", source_url="https://example.com/",
+                             source_kind="url", platform="example", claimed_location=None,
+                             claimed_datetime=None, description=None, tags=None,
+                             graphic_flag=False)
+        capture.ingest(conn, wcfg, item_id=iid, source="https://example.com/",
+                       source_kind="url", actor="t", graphic=False, keyframes_n=0)
+    # Later the archive is reachable again.
+    monkeypatch.setattr(capture, "wayback_save", lambda cfg, url: (
+        "https://web.archive.org/web/2026/https://example.com/", "ok", "http 200"))
+    with db.connect(wcfg) as conn:
+        res = capture.retry_snapshots(conn, wcfg, actor="t")
+        rows = [r["status"] for r in conn.execute(
+            "SELECT status FROM captures WHERE item_id=? AND method='wayback' ORDER BY id",
+            (iid,)).fetchall()]
+        log = [r["action"] for r in conn.execute(
+            "SELECT action FROM custody_log WHERE item_id=?", (iid,)).fetchall()]
+    assert res and res[0]["status"] == "ok"
+    assert rows == ["failed", "ok"] and "wayback_retry" in log    # history kept, row added
+    with db.connect(wcfg) as conn:
+        assert capture.retry_snapshots(conn, wcfg, actor="t") == []   # nothing left to retry
+
+
+def test_wayback_existing_falls_back_to_the_bare_url_form(cfg, monkeypatch):
+    """Observed live: the availability API answered an HTML 429 for the
+    scheme-bearing URL but returned the snapshot for the bare form."""
+    class R:
+        def __init__(self, payload=None):
+            self._p = payload
+
+        def json(self):
+            if self._p is None:
+                raise ValueError("not JSON (an HTML 429 page)")
+            return self._p
+
+    seen = []
+
+    def get(url, params=None, timeout=None):
+        seen.append(params["url"])
+        if params["url"].startswith("https://"):
+            return R()                                       # rate-limited HTML
+        return R({"archived_snapshots": {"closest": {
+            "available": True, "timestamp": "20250101000000",
+            "url": "http://web.archive.org/web/20250101000000/http://example.com/"}}})
+    monkeypatch.setattr("requests.get", get)
+    wb, ts = capture.wayback_existing(cfg, "https://example.com/")
+    assert ts == "20250101000000" and wb.endswith("/http://example.com/")
+    assert seen == ["https://example.com/", "example.com"]

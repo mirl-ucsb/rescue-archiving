@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS captures (
     warc_path    TEXT,
     tool         TEXT,
     tool_version TEXT,
-    status       TEXT NOT NULL DEFAULT 'ok',         -- 'ok' | 'failed' | 'skipped'
+    status       TEXT NOT NULL DEFAULT 'ok',         -- 'ok' | 'failed' | 'skipped' | 'existing' | 'pending' | 'partial' | 'metadata-only'
     detail       TEXT
 );
 

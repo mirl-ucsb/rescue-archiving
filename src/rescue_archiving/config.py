@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import date
 from functools import lru_cache
@@ -98,6 +99,8 @@ class Config:
     # OpenTimestamps, the trustless second anchor: on by default, skipped
     # gracefully unless the optional [ots] extra is installed. RESCUE_ARCHIVING_OTS=0 off.
     ots_enabled: bool = True
+    # Hard ceiling on media files from one add (passed to gallery-dl as a range).
+    multi_file_cap: int = 20
 
     @property
     def db_path(self) -> Path:
@@ -153,6 +156,12 @@ def get_config() -> Config:
     timestamp = os.environ.get("RESCUE_ARCHIVING_TIMESTAMP", "1").lower() not in ("0", "false", "no")
     tsa_url = os.environ.get("RESCUE_ARCHIVING_TSA_URL") or DEFAULT_TSA_URL
     ots = os.environ.get("RESCUE_ARCHIVING_OTS", "1").lower() not in ("0", "false", "no")
+    wayback_endpoint = (os.environ.get("RESCUE_ARCHIVING_WAYBACK_ENDPOINT")
+                        or "https://web.archive.org/save/")
+    try:
+        cap = max(1, int(os.environ.get("RESCUE_ARCHIVING_MULTI_FILE_CAP", "20")))
+    except ValueError:
+        cap = 20
     return Config(
         root=root,
         data_dir=data_dir,
@@ -160,9 +169,11 @@ def get_config() -> Config:
         operator=operator,
         wayback_enabled=wayback,
         archivebox_enabled=archivebox,
+        wayback_endpoint=wayback_endpoint,
         timestamp_enabled=timestamp,
         tsa_url=tsa_url,
         ots_enabled=ots,
+        multi_file_cap=cap,
     )
 
 
@@ -198,20 +209,37 @@ def _tool_version(name: str, exe: str) -> str | None:
         return None
 
 
+def _which(name: str) -> str | None:
+    """PATH first, then beside the running interpreter, so a tool installed into
+    the venv (pip install -e ".[media]") is found without activating it."""
+    exe = shutil.which(name)
+    if exe:
+        return exe
+    cand = Path(sys.executable).parent / name
+    return str(cand) if cand.exists() else None
+
+
 @lru_cache(maxsize=1)
 def capabilities() -> dict[str, Capability]:
     """Detect external tools once per process. Cached."""
     caps: dict[str, Capability] = {}
     for name in KNOWN_TOOLS:
-        exe = shutil.which(name)
+        exe = _which(name)
         version = _tool_version(name, exe) if exe else None
         caps[name] = Capability(name=name, path=exe, version=version)
-    # Optional Python libs (pHash, EXIF) are reported too.
+    # Optional Python libs (pHash, EXIF, timestamps, URL classification) are reported too.
     caps["imagehash"] = Capability("imagehash", *_pylib("imagehash"))
     caps["Pillow"] = Capability("Pillow", *_pylib("PIL"))
     caps["pyexiftool"] = Capability("pyexiftool", *_pylib("exiftool"))
     caps["opentimestamps"] = Capability("opentimestamps", *_pylib("opentimestamps"))
+    caps["gallery-dl-module"] = Capability("gallery-dl-module", *_pylib("gallery_dl"))
     return caps
+
+
+def tool_path(tool: str) -> str | None:
+    """Resolved executable for a known tool, or None."""
+    cap = capabilities().get(tool)
+    return cap.path if cap else None
 
 
 def _pylib(module: str) -> tuple[str | None, str | None]:

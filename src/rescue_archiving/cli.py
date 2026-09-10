@@ -147,6 +147,10 @@ def add(
                                       help="Skip the RFC 3161 timestamp proof."),
     no_ots: bool = typer.Option(False, "--no-ots",
                                 help="Skip the OpenTimestamps (Bitcoin) proof."),
+    whole_post: bool = typer.Option(
+        False, "--whole-post",
+        help="Capture every file in a single post even if the link is not recognised "
+             "as one (logged; still hard-capped). Never expands a feed."),
 ) -> None:
     """Ingest one operator-supplied item: capture, snapshot, hash, stamp, log."""
     kind = _classify_target(target)
@@ -186,7 +190,7 @@ def add(
             summary = capture.ingest(
                 conn, cfg, item_id=item_id, source=target, source_kind=kind,
                 actor=actor, graphic=graphic, keyframes_n=keyframes,
-                make_thumbnails=make_thumbnails,
+                make_thumbnails=make_thumbnails, whole_post=whole_post,
             )
         except (FileNotFoundError, ValueError) as e:
             # The whole transaction rolls back on raise, so the item row and any
@@ -212,6 +216,9 @@ def add(
     if kind == "url":
         wb = summary.wayback_url or "(none - see custody log)"
         _echo(f"  wayback : {wb}")
+        if summary.capture_mode:
+            _echo(f"  capture : {summary.capture_mode} "
+                  f"({summary.classification or 'unclassified'})")
     for w in summary.warnings:
         _echo(f"  note    : {w}")
     if not summary.files:
@@ -513,6 +520,35 @@ def upgrade_stamps_cmd(
                 _echo(f"  pending  #{r['item_id']} {res['file']}  {res['detail']}")
     _echo(f"\nUpgraded {done}; {still} still pending "
           "(Bitcoin typically confirms within hours; run again later).")
+
+
+# ---------------------------------------------------------------------------
+# retry-snapshots (Wayback fallback)
+# ---------------------------------------------------------------------------
+@app.command("retry-snapshots")
+def retry_snapshots_cmd(
+    item_id: int = typer.Argument(
+        None, help="Item id, or omit for every web item without a fresh Wayback snapshot."),
+) -> None:
+    """Re-request a Wayback Machine snapshot for web items whose last attempt
+    failed or found only an earlier snapshot.
+
+    A deliberate --no-wayback skip is retried only when you name the item.
+    Adds a new capture record and custody entry; never rewrites earlier ones.
+    """
+    cfg = config.get_config()
+    db.init_db(cfg)
+    with db.connect(cfg) as conn:
+        results = capture.retry_snapshots(conn, cfg, item_id=item_id, actor=cfg.operator)
+    if not results:
+        _echo("Nothing to retry: every web item already has a fresh Wayback snapshot.")
+        return
+    for r in results:
+        mark = "OK      " if r["status"] == "ok" else f"{r['status']:8}"
+        _echo(f"  {mark} #{r['item_id']}  {r['url'] or r['detail']}")
+    ok = sum(1 for r in results if r["status"] == "ok")
+    _echo(f"\nRetried {len(results)}: {_bold(str(ok))} ok, "
+          f"{len(results) - ok} still without a fresh snapshot.")
 
 
 # ---------------------------------------------------------------------------

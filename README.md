@@ -494,6 +494,44 @@ afterthought. In practice:
 
 ---
 
+## Whole posts, and when the Wayback Machine fails
+
+**Multi-image posts.** A single post can hold several images. Fetching only
+the first was the safe default, because the same downloader would happily walk
+an entire profile if pointed at one, and the tool never expands a feed. It now
+asks gallery-dl's own URL matcher, offline, what kind of page a link is. A
+single item (a tweet, a post, a submission, an album, a file) is captured whole;
+a profile, timeline, tag, search, or other feed is still limited to its first
+item, and the tool says so and why. Either way a hard cap
+(`RESCUE_ARCHIVING_MULTI_FILE_CAP`, default 20) is handed to the downloader
+itself, so a misclassified feed cannot expand past it. If you know a link is a
+single post the matcher does not recognise, `add --whole-post` overrides the
+limit, still capped, and the override is logged. The classification and the
+mode are recorded in the custody log for every capture. The matcher needs the
+`gallery_dl` Python module (part of the `[media]` extra); without it, capture
+stays at the first item and `doctor` says so.
+
+**When the Wayback Machine fails.** Save Page Now is rate-limited and sometimes
+down. A request now retries with a short back-off, and if it still fails the
+tool asks the Wayback availability API whether a snapshot of that URL already
+exists. If one does, it is recorded with status `existing`, an earlier
+third-party copy clearly marked as not a fresh capture, so independent
+provenance is not silently lost. Later, `retry-snapshots` re-requests a fresh
+snapshot for every web item whose last attempt did not produce one, adding a
+new capture record rather than rewriting the old one.
+
+```bash
+rescue-archiving retry-snapshots        # re-request Wayback for every item without a fresh snapshot
+rescue-archiving retry-snapshots 4      # just item 4
+```
+
+archive.today was considered as a second snapshot service and rejected: it
+blocks programmatic use and was unreachable from an ordinary network in
+testing, so a fallback that depended on it would fail exactly when needed.
+ArchiveBox remains the opt-in local WARC copy.
+
+---
+
 ## Proving when something existed (timestamps)
 
 A hash proves *what* the bytes are. It cannot, on its own, prove *when* they
@@ -679,13 +717,14 @@ and developers.
 |---|---|
 | `init` | Create the data tree and schema (idempotent). |
 | `doctor` | Show config paths and external-tool capabilities. |
-| `add URL\|PATH` | Ingest one item. Options: `--location --datetime --note --tags --graphic --keyframes --make-thumbnails --uploader-handle --contributor-note --operator --no-wayback --no-timestamp --no-ots`. |
+| `add URL\|PATH` | Ingest one item. Options: `--location --datetime --note --tags --graphic --keyframes --make-thumbnails --uploader-handle --contributor-note --operator --no-wayback --no-timestamp --no-ots --whole-post`. |
 | `list` | List items. Options: `--status --tag --since`. |
 | `show ID` | Full detail. Options: `--show-sensitive` (logged), `--log-tail`. |
 | `verify ID` | Open a verification record. Options: `--verdict --method --notes --verifier`. |
 | `check [ID]` | Recompute SHA-256 and report match / mismatch / missing. Exits non-zero on any mismatch or missing file, so it can gate scheduled integrity sweeps. |
 | `verify-stamps [ID]` | Re-verify both timestamp anchors. RFC 3161: recompute the nonced commitment and check the authority's token (offline). OpenTimestamps: check the proof's digest against the file, then light-verify a completed proof's Bitcoin block against two public explorers (`--offline` skips). Exits non-zero on any invalid proof. |
 | `upgrade-stamps [ID]` | Complete pending OpenTimestamps proofs once Bitcoin has confirmed them; writes `<file>.bitcoin.ots` beside the untouched pending proof. |
+| `retry-snapshots [ID]` | Re-request a Wayback snapshot for web items whose last attempt failed or found only an earlier snapshot (a deliberate `--no-wayback` skip is retried only when the item is named). Adds a capture record; never rewrites one. |
 | `dedup` | Link exact (SHA-256) and near (pHash) duplicates. Option: `--threshold`. |
 | `export` | Options: `--format json\|csv\|bundle --since --out --redact-source --internal --include-sensitive --no-media`. A bundle redacts source links and staff identity by default; `--internal` keeps them. |
 
@@ -694,7 +733,7 @@ and developers.
 | Tool / library        | Used for                               | If missing |
 |-----------------------|----------------------------------------|------------|
 | yt-dlp                | video / post download + info JSON      | no video URL capture |
-| gallery-dl            | image-set download                     | no image-set URL capture |
+| gallery-dl            | image-post download; its Python module classifies single post vs feed | no image URL capture; without the module, first item only |
 | ffmpeg / ffprobe      | video keyframe extraction              | no keyframes |
 | exiftool + PyExifTool | EXIF extraction                        | no EXIF sidecars |
 | imagehash + Pillow    | perceptual hash (near-duplicate links) | exact SHA-256 dedup only |
@@ -726,8 +765,10 @@ log (M2); the Wayback Save API, EXIF sidecars, and keyframe extraction (M3);
 perceptual hashing, dedup linking, and the verification workflow (M4); and JSON,
 CSV, and bundle export plus `check` integrity re-verification (M5). RFC 3161
 timestamp proofs and `verify-stamps` were added in 0.3.0; OpenTimestamps, the
-trustless Bitcoin-anchored second anchor, and `upgrade-stamps` in 0.4.0.
-Cryptographic signing of manifests (C2PA) is intentionally out of scope for now.
+trustless Bitcoin-anchored second anchor, and `upgrade-stamps` in 0.4.0;
+classified whole-post capture and the Wayback fallback with `retry-snapshots`
+in 0.5.0. Cryptographic signing of manifests (C2PA) is intentionally out of
+scope for now.
 
 ### Project guardrails
 
@@ -736,9 +777,11 @@ security policy.
 
 1. **Human-supplied input only, no credentialed access.** Operators add one
    specific URL or file per `add`. There is no crawling and no feed expansion:
-   yt-dlp runs with `--no-playlist`, gallery-dl runs with `--range 1`, directory
-   ingest is refused, and a single item that yields an unusually large number of
-   media files is flagged in the custody log for review. Neither downloader
+   yt-dlp runs with `--no-playlist`; gallery-dl takes a whole post only when
+   its own URL matcher classifies the link as a single item, otherwise its
+   first item, and always under a hard cap (default 20) passed to the
+   downloader itself; directory ingest is refused; and reaching the cap is
+   flagged in the custody log for review. Neither downloader
    loads ambient user config (`--ignore-config` / `--config-ignore`), so a stray
    cookie or stored credential cannot leak a private session into a capture.
 2. **Integrity.** Originals are never modified or re-encoded. Files are hashed
@@ -812,6 +855,8 @@ exports/                       # manifests, CSVs, bundles
 - `RESCUE_ARCHIVING_TIMESTAMP=0` - disable RFC 3161 timestamp proofs (on by default).
 - `RESCUE_ARCHIVING_TSA_URL` - timestamp authority (default: DigiCert's public responder).
 - `RESCUE_ARCHIVING_OTS=0` - disable OpenTimestamps proofs (on by default; needs the `[ots]` extra).
+- `RESCUE_ARCHIVING_MULTI_FILE_CAP` - hard cap on media files from one `add` (default 20).
+- `RESCUE_ARCHIVING_WAYBACK_ENDPOINT` - Save Page Now endpoint override (default `https://web.archive.org/save/`).
 - `RESCUE_ARCHIVING_ROOT` - base directory if you prefer to set one root.
 
 ### Decisions (confirmed 2026-06-01)
@@ -844,9 +889,10 @@ identities (isolated and excluded from default exports); independent provenance
 (Wayback and an independent timestamp authority); and locality
 (owner-only storage, no cloud).
 
-Does not, and caveats: it does not verify content (people do); gallery-dl is
-pinned to a single item (`--range 1`), which prevents feed expansion but can
-under-capture a multi-image post; provenance sidecars persist on disk and carry
+Does not, and caveats: it does not verify content (people do); gallery-dl takes
+a whole post only when its URL matcher classifies the link as a single item,
+always under a hard cap (default 20), so an unusually large post can still be
+truncated, which is recorded; provenance sidecars persist on disk and carry
 identity/GPS, so the whole `data/` tree is sensitive; integrity anchors are
 SHA-256, the append-only log, and RFC 3161 timestamp proofs: the custody
 triggers stop accidental or casual rewriting, and a party with direct disk or

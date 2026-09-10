@@ -27,6 +27,7 @@ import os
 import shutil
 import stat
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
@@ -34,9 +35,49 @@ from urllib.parse import urlparse
 from . import config, db, hashing, metadata, ots, timestamp
 
 # A single operator-supplied post may legitimately hold several files (e.g. a
-# multi-image post). More than this many media originals from one ``add`` is
-# treated as a likely feed/profile expansion and flagged loudly in custody.
+# multi-image post). This many media originals from one ``add`` is the hard
+# ceiling passed to gallery-dl itself (``--range 1-N``); reaching it is flagged
+# loudly in custody. Override with RESCUE_ARCHIVING_MULTI_FILE_CAP.
 MULTI_FILE_CAP = 20
+
+# Subcategory names gallery-dl's own URL matcher uses for a SINGLE item (one
+# post, one album, one file). Anything else (user, timeline, media, posts,
+# search, tag, likes, ...) is a feed or profile and is never expanded. The names
+# are consistent across gallery-dl's extractors, so this list is platform-agnostic.
+SINGLE_POST_SUBCATEGORIES = frozenset({
+    "post", "tweet", "submission", "status", "image", "photo", "picture", "file",
+    "album", "gallery", "set", "video", "vmpost", "redirect", "item", "deviation",
+    "artwork",
+})
+
+# Wayback Save Page Now is rate-limited and sometimes down: retry transient
+# failures with a short back-off, then fall back to any existing snapshot.
+WAYBACK_RETRY_DELAYS = (0, 8, 20)
+WAYBACK_RETRYABLE = (429, 500, 502, 503, 504)
+WAYBACK_AVAILABLE = "https://archive.org/wayback/available"
+
+
+def classify_url(url: str) -> tuple[str, str] | None:
+    """(category, subcategory) from gallery-dl's own URL matcher, offline.
+
+    None when the ``gallery_dl`` module is not importable or nothing matches;
+    callers treat None conservatively (first item only).
+    """
+    try:
+        from gallery_dl import extractor  # type: ignore
+    except Exception:
+        return None
+    try:
+        ex = extractor.find(url)
+    except Exception:
+        return None
+    if ex is None:
+        return None
+    return (str(ex.category), str(ex.subcategory))
+
+
+def is_single_post(classification: tuple[str, str] | None) -> bool:
+    return bool(classification) and classification[1] in SINGLE_POST_SUBCATEGORIES
 
 
 @dataclass
@@ -46,7 +87,9 @@ class IngestSummary:
     wayback_url: str | None = None
     warc_path: str | None = None
     warnings: list[str] = field(default_factory=list)
-    stamps: list[dict] = field(default_factory=list)   # RFC 3161 results per file
+    stamps: list[dict] = field(default_factory=list)   # RFC 3161 / OTS results per file
+    classification: str | None = None                  # gallery-dl 'category.subcategory'
+    capture_mode: str | None = None                    # 'whole-post' | 'single-item'
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +168,7 @@ def _run_ytdlp(url: str, dest_dir: Path) -> tuple[int, str]:
     """Download a single operator-supplied item. No auth, no playlist crawl."""
     out_tmpl = str(dest_dir / "%(id)s.%(ext)s")
     cmd = [
-        "yt-dlp",
+        config.tool_path("yt-dlp") or "yt-dlp",
         "--ignore-config",        # no ambient user config (could inject cookies/auth)
         "--no-playlist",          # single item only; never expand a feed
         "--no-progress",
@@ -140,15 +183,19 @@ def _run_ytdlp(url: str, dest_dir: Path) -> tuple[int, str]:
     return _run(cmd)
 
 
-def _run_gallery_dl(url: str, dest_dir: Path) -> tuple[int, str]:
+def _run_gallery_dl(url: str, dest_dir: Path, whole_post: bool = False,
+                    cap: int = MULTI_FILE_CAP) -> tuple[int, str]:
     # Mirror the yt-dlp guarantees on the gallery-dl path:
     #   --config-ignore  : refuse ambient ~/.config/gallery-dl creds/cookies
-    #   --range 1        : single item only; do not expand a profile/feed
+    #   --range          : first item only by default; a link classified as a
+    #                      single post may take the whole post, hard-capped so a
+    #                      misclassified feed can never expand past ``cap``
     #   --filename ...   : identity-free, deterministic names (no uploader handle)
+    rng = f"1-{cap}" if whole_post else "1"
     cmd = [
-        "gallery-dl",
+        config.tool_path("gallery-dl") or "gallery-dl",
         "--config-ignore",
-        "--range", "1",
+        "--range", rng,
         "--no-mtime",
         "--filename", "{num:>04}.{extension}",
         "-D", str(dest_dir),
@@ -175,9 +222,10 @@ def _run(cmd: list[str], timeout: int = 1800) -> tuple[int, str]:
 def wayback_save(cfg: config.Config, url: str) -> tuple[str | None, str, str]:
     """Request an independent Wayback Machine snapshot.
 
-    Returns (wayback_url, status, detail). Failure is non-fatal: the item is
-    still captured locally; we just record that the independent copy failed so
-    an operator can retry.
+    Returns (wayback_url, status, detail). Transient failures (rate limits,
+    server errors, network hiccups) are retried with a short back-off. Failure
+    is non-fatal: the item is still captured locally; we record that the
+    independent copy failed so ``retry-snapshots`` can try again later.
     """
     if not cfg.wayback_enabled:
         return None, "skipped", "wayback disabled in config"
@@ -185,21 +233,84 @@ def wayback_save(cfg: config.Config, url: str) -> tuple[str | None, str, str]:
         import requests  # type: ignore
     except Exception:
         return None, "failed", "requests library not installed"
-    try:
-        resp = requests.get(
-            cfg.wayback_endpoint + url,
-            timeout=cfg.wayback_timeout,
-            allow_redirects=True,
-            headers={"User-Agent": "rescue-archiving/0.1 (+counter-archival capture)"},
-        )
+    last = "no attempt"
+    for delay in WAYBACK_RETRY_DELAYS:
+        if delay:
+            time.sleep(delay)
+        try:
+            resp = requests.get(
+                cfg.wayback_endpoint + url,
+                timeout=cfg.wayback_timeout,
+                allow_redirects=True,
+                headers={"User-Agent": "rescue-archiving (+counter-archival capture)"},
+            )
+        except Exception as e:  # network errors, timeouts: transient, retry
+            last = f"{type(e).__name__}: {e}"
+            continue
         loc = resp.headers.get("Content-Location") or resp.headers.get("content-location")
         if loc:
             return "https://web.archive.org" + loc, "ok", f"http {resp.status_code}"
         if resp.url and "/web/" in resp.url:
             return resp.url, "ok", f"http {resp.status_code}"
-        return None, "failed", f"no snapshot url in response (http {resp.status_code})"
-    except Exception as e:  # network errors, timeouts
-        return None, "failed", f"{type(e).__name__}: {e}"
+        last = f"no snapshot url in response (http {resp.status_code})"
+        if resp.status_code not in WAYBACK_RETRYABLE:
+            break                       # not transient (e.g. the URL cannot be archived)
+    return None, "failed", last
+
+
+def wayback_existing(cfg: config.Config, url: str) -> tuple[str | None, str | None]:
+    """The closest EXISTING snapshot (url, timestamp) via the availability API,
+    or (None, None). Used only after a fresh Save Page Now request has failed,
+    so independent provenance degrades to 'an earlier copy exists' rather than
+    to nothing."""
+    try:
+        import requests  # type: ignore
+    except Exception:
+        return None, None
+    # The availability API matches loosely and answers most reliably for a bare
+    # form (observed: an HTML 429 for 'https://example.com/' while 'example.com'
+    # returned the snapshot), so try the URL as given, then without its scheme.
+    bare = (url.split("://", 1)[1] if "://" in url else url).rstrip("/")
+    for candidate in dict.fromkeys((url, bare)):
+        try:
+            r = requests.get(WAYBACK_AVAILABLE, params={"url": candidate}, timeout=30)
+            closest = (r.json().get("archived_snapshots") or {}).get("closest") or {}
+            if closest.get("available") and closest.get("url"):
+                return closest["url"], closest.get("timestamp")
+        except Exception:
+            continue
+    return None, None
+
+
+def retry_snapshots(conn, cfg: config.Config, *, item_id: int | None = None,
+                    actor: str) -> list[dict]:
+    """Re-request a Wayback snapshot for web items whose latest attempt failed
+    or found only an earlier snapshot. A deliberate skip (``--no-wayback``) is
+    retried only when the item is named explicitly. Adds a new capture row and
+    custody entry; never rewrites earlier ones."""
+    q = "SELECT id, source_url FROM items WHERE source_kind = 'url' AND source_url IS NOT NULL"
+    params: tuple = ()
+    if item_id is not None:
+        q += " AND id = ?"
+        params = (item_id,)
+    results = []
+    for it in conn.execute(q + " ORDER BY id", params).fetchall():
+        last = conn.execute(
+            "SELECT status FROM captures WHERE item_id = ? AND method = 'wayback' "
+            "ORDER BY id DESC LIMIT 1", (it["id"],)).fetchone()
+        if last and last["status"] == "ok":
+            continue
+        # In a sweep, respect a deliberate --no-wayback skip; naming the item
+        # is the operator saying "now try".
+        if item_id is None and (last is None or last["status"] == "skipped"):
+            continue
+        wb, status, detail = wayback_save(cfg, it["source_url"])
+        db.add_capture_row(conn, item_id=it["id"], method="wayback", wayback_url=wb,
+                           tool="wayback-save-api", status=status, detail=f"retry: {detail}")
+        db.log_custody(conn, item_id=it["id"], actor=actor, action="wayback_retry",
+                       detail={"status": status, "url": wb, "info": detail})
+        results.append({"item_id": it["id"], "status": status, "url": wb, "detail": detail})
+    return results
 
 
 def archivebox_snapshot(cfg: config.Config, url: str) -> tuple[str | None, str, str]:
@@ -231,6 +342,7 @@ def ingest(
     graphic: bool,
     keyframes_n: int = 5,
     make_thumbnails: bool = False,
+    whole_post: bool = False,
 ) -> IngestSummary:
     cfg.ensure_dirs()
     item_dir = cfg.item_dir(item_id)
@@ -246,7 +358,8 @@ def ingest(
     if source_kind == "file":
         saved = _ingest_local_file(conn, cfg, item_id, source, actor, summary)
     else:
-        saved = _ingest_url(conn, cfg, item_id, source, actor, summary)
+        saved = _ingest_url(conn, cfg, item_id, source, actor, summary,
+                            whole_post=whole_post)
 
     # --- 2. Hash + register every stored original ------------------------
     # A directly operator-supplied file is always an 'original', even if its
@@ -298,6 +411,19 @@ def ingest(
     # --- 4. Independent snapshot (web items only) ------------------------
     if source_kind == "url":
         wb_url, wb_status, wb_detail = wayback_save(cfg, source)
+        if wb_status == "failed":
+            # Fall back to an earlier third-party copy, clearly marked as such.
+            ex_url, ex_ts = wayback_existing(cfg, source)
+            if ex_url:
+                wb_url, wb_status = ex_url, "existing"
+                wb_detail = (f"fresh snapshot failed ({wb_detail}); earlier snapshot "
+                             f"{ex_ts} found via the availability API")
+                summary.warnings.append(
+                    f"fresh Wayback snapshot failed; an earlier snapshot exists "
+                    f"({ex_ts}); run retry-snapshots later for a fresh one")
+                db.log_custody(conn, item_id=item_id, actor=actor,
+                               action="wayback_existing",
+                               detail={"url": ex_url, "timestamp": ex_ts})
         summary.wayback_url = wb_url
         db.add_capture_row(conn, item_id=item_id, method="wayback",
                            wayback_url=wb_url, tool="wayback-save-api",
@@ -340,8 +466,11 @@ def _ingest_local_file(conn, cfg, item_id, source, actor, summary) -> list[Path]
     return [dst]
 
 
-def _ingest_url(conn, cfg, item_id, url, actor, summary) -> list[Path]:
+def _ingest_url(conn, cfg, item_id, url, actor, summary,
+                whole_post: bool = False) -> list[Path]:
     item_dir = cfg.item_dir(item_id)
+    cap = cfg.multi_file_cap
+    classification = mode = None
     before = set(item_dir.iterdir()) if item_dir.exists() else set()
     method = "yt-dlp"
     code, detail = (127, "yt-dlp not found")
@@ -353,10 +482,22 @@ def _ingest_url(conn, cfg, item_id, url, actor, summary) -> list[Path]:
     def media(paths):
         return [p for p in paths if metadata.media_type_for(p) in ("video", "image", "audio")]
 
-    # If yt-dlp produced no media (e.g. an image gallery URL), try gallery-dl.
+    # If yt-dlp produced no media (e.g. an image post), try gallery-dl. Ask
+    # gallery-dl's own URL matcher first: a single item may be taken whole,
+    # anything else stays at its first item. Guardrail 1: never expand a feed.
     if not media(produced) and config.has("gallery-dl"):
         method = "gallery-dl"
-        g_code, g_detail = _run_gallery_dl(url, item_dir)
+        cls = classify_url(url)
+        classification = f"{cls[0]}.{cls[1]}" if cls else None
+        whole = whole_post or is_single_post(cls)
+        mode = "whole-post" if whole else "single-item"
+        summary.classification, summary.capture_mode = classification, mode
+        if not whole:
+            summary.warnings.append(
+                f"link classified as {classification or 'unclassified'} (a set, feed, "
+                f"or unknown): captured the first item only; pass --whole-post to "
+                f"override (capped at {cap})")
+        g_code, g_detail = _run_gallery_dl(url, item_dir, whole_post=whole, cap=cap)
         code, detail = g_code, g_detail
         produced = sorted(p for p in item_dir.iterdir() if p not in before)
 
@@ -379,18 +520,21 @@ def _ingest_url(conn, cfg, item_id, url, actor, summary) -> list[Path]:
     db.log_custody(conn, item_id=item_id, actor=actor, action="download",
                    detail={"method": method, "status": status, "exit": code,
                            "files": len(produced), "media": len(media_files),
-                           "info": detail})
+                           "classification": classification, "mode": mode,
+                           "override": bool(whole_post), "info": detail})
     if status != "ok":
         summary.warnings.append(f"capture {status} ({method} exit={code}): {detail}")
 
-    # Guardrail 1 backstop: a single operator item should not yield a feed.
-    if len(media_files) > MULTI_FILE_CAP:
-        msg = (f"{len(media_files)} media files from one item: possible feed/"
-               f"profile expansion; review before trusting this capture")
+    # Guardrail 1 backstop: reaching the hard cap means the post may hold more,
+    # or the link was a feed after all. Either way, review before trusting it.
+    if len(media_files) >= cap:
+        msg = (f"{len(media_files)} media files from one item: reached the {cap}-file "
+               f"cap; the post may hold more, or this may be a feed; review before "
+               f"trusting this capture")
         summary.warnings.append(msg)
         db.log_custody(conn, item_id=item_id, actor=actor,
                        action="multi_file_flag",
-                       detail={"media_files": len(media_files), "cap": MULTI_FILE_CAP})
+                       detail={"media_files": len(media_files), "cap": cap})
 
     # Freeze everything we captured, including the info JSON sidecar.
     for p in produced:
