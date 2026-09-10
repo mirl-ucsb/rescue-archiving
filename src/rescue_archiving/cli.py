@@ -10,12 +10,13 @@ SQLite transaction per command so a failure rolls back cleanly.
 from __future__ import annotations
 
 import dataclasses
+import json
 from pathlib import Path
 from urllib.parse import urlparse
 
 import typer
 
-from . import capture, config, db, dedup, export, hashing
+from . import capture, config, db, dedup, export, hashing, timestamp
 
 app = typer.Typer(
     add_completion=False,
@@ -28,13 +29,16 @@ app = typer.Typer(
 # Shared helpers
 # ---------------------------------------------------------------------------
 def _effective_cfg(operator: str | None = None, no_wayback: bool = False,
-                   archivebox: bool | None = None) -> config.Config:
+                   archivebox: bool | None = None,
+                   no_timestamp: bool = False) -> config.Config:
     cfg = config.get_config()
     changes: dict = {}
     if operator:
         changes["operator"] = operator
     if no_wayback:
         changes["wayback_enabled"] = False
+    if no_timestamp:
+        changes["timestamp_enabled"] = False
     if archivebox is not None:
         changes["archivebox_enabled"] = archivebox
     return dataclasses.replace(cfg, **changes) if changes else cfg
@@ -86,6 +90,8 @@ def doctor() -> None:
     _echo(f"  operator        : {cfg.operator}")
     _echo(f"  wayback enabled : {cfg.wayback_enabled}")
     _echo(f"  archivebox      : {cfg.archivebox_enabled}")
+    _echo(f"  timestamp (TSA) : {cfg.timestamp_enabled}"
+          + (f"  {cfg.tsa_url}" if cfg.timestamp_enabled else ""))
     _echo()
     _echo(_bold("Capabilities"))
     for name, cap in config.capabilities().items():
@@ -132,10 +138,13 @@ def add(
         None, "--contributor-note", help="SENSITIVE. Access-controlled."),
     operator: str = typer.Option(None, "--operator", help="Override operator identity."),
     no_wayback: bool = typer.Option(False, "--no-wayback", help="Skip the Wayback snapshot."),
+    no_timestamp: bool = typer.Option(False, "--no-timestamp",
+                                      help="Skip the RFC 3161 timestamp proof."),
 ) -> None:
-    """Ingest one operator-supplied item: capture, snapshot, hash, log."""
+    """Ingest one operator-supplied item: capture, snapshot, hash, stamp, log."""
     kind = _classify_target(target)
-    cfg = _effective_cfg(operator=operator, no_wayback=no_wayback)
+    cfg = _effective_cfg(operator=operator, no_wayback=no_wayback,
+                         no_timestamp=no_timestamp)
     db.init_db(cfg)
     actor = cfg.operator
 
@@ -186,6 +195,9 @@ def add(
     _echo(f"Added item {_bold('#' + str(item_id))}  ({kind})")
     for f in summary.files:
         _echo(f"  {f['role']:8s} {f['media_type']:6s} {f['sha256'][:16]}...  {f['path']}")
+    for s in summary.stamps:
+        if s["status"] == "ok":
+            _echo(f"  stamp    rfc3161  attested {s['gen_time']}  {s['file']}")
     if kind == "url":
         wb = summary.wayback_url or "(none - see custody log)"
         _echo(f"  wayback : {wb}")
@@ -273,6 +285,13 @@ def show(
             _echo(_bold(f"\n  Captures ({len(caps)})"))
             for c in caps:
                 extra = c["wayback_url"] or c["warc_path"] or ""
+                if c["method"] == "rfc3161" and c["detail"]:
+                    try:
+                        d = json.loads(c["detail"])
+                        extra = (f"attested {d.get('gen_time')}  {d.get('file')}"
+                                 if c["status"] == "ok" else d.get("error", ""))
+                    except ValueError:
+                        pass
                 _echo(f"    {c['method']:12} {c['status']:8} {c['capture_ts']}  {extra}")
 
         vers = conn.execute(
@@ -385,6 +404,45 @@ def check(
     _echo(f"\nChecked {ok + bad + missing} files: "
           f"{_bold(str(ok))} ok, {bad} mismatch, {missing} missing.")
     if bad or missing:
+        raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------------------
+# verify-stamps (RFC 3161 re-verification)
+# ---------------------------------------------------------------------------
+@app.command("verify-stamps")
+def verify_stamps_cmd(
+    item_id: int = typer.Argument(None, help="Item id, or omit to verify every stamp."),
+) -> None:
+    """Re-verify RFC 3161 timestamp proofs.
+
+    For each proof, recompute the file's nonced commitment from its current
+    bytes and check the TSA token binds it. Exits non-zero on any invalid stamp.
+    """
+    cfg = config.get_config()
+    db.init_db(cfg)
+    ok = bad = 0
+    with db.connect(cfg) as conn:
+        rows = timestamp.list_stamp_metas(conn, item_id)
+        if not rows:
+            _echo("No timestamp proofs found"
+                  + ("." if item_id is None else f" for item #{item_id}."))
+            return
+        for r in rows:
+            res = timestamp.verify_stamp(cfg, cfg.data_dir / r["path"])
+            if res["ok"]:
+                ok += 1
+                _echo(f"  OK       #{r['item_id']} {res['file']}  attested "
+                      f"{res.get('gen_time')}  via {res.get('trust_path')}")
+            else:
+                bad += 1
+                _echo(f"  INVALID  #{r['item_id']} {res['file']}  {res['reason']}")
+            db.log_custody(conn, item_id=r["item_id"], actor=cfg.operator,
+                           action="stamp_verified" if res["ok"] else "stamp_invalid",
+                           detail={"file": res["file"], "reason": res.get("reason"),
+                                   "trust_path": res.get("trust_path")})
+    _echo(f"\nVerified {ok + bad} stamps: {_bold(str(ok))} ok, {bad} invalid.")
+    if bad:
         raise typer.Exit(code=1)
 
 

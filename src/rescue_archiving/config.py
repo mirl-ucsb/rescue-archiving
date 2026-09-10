@@ -35,7 +35,14 @@ ORIGINAL_MODE = 0o444  # captured originals: read-only for everyone
 EXPORT_DIR_MODE = 0o700
 
 # External tools we know how to drive. Order is display order.
-KNOWN_TOOLS = ("yt-dlp", "gallery-dl", "ffmpeg", "ffprobe", "exiftool", "archivebox")
+KNOWN_TOOLS = ("yt-dlp", "gallery-dl", "ffmpeg", "ffprobe", "exiftool", "archivebox",
+               "openssl")
+
+# RFC 3161 Time Stamping Authority. DigiCert's public responder is free, embeds
+# its full chain (root included), and its root is in the Mozilla trust store, so
+# proofs verify with plain openssl anywhere. Override with RESCUE_ARCHIVING_TSA_URL
+# (for example https://freetsa.org/tsr, which is self-rooted).
+DEFAULT_TSA_URL = "http://timestamp.digicert.com"
 
 # yt-dlp versions are date-stamped (YYYY.MM.DD). Platforms change their delivery
 # often, so a stale build is the most likely silent break in web capture; doctor
@@ -83,6 +90,11 @@ class Config:
     # Wayback Save API politeness / robustness.
     wayback_endpoint: str = "https://web.archive.org/save/"
     wayback_timeout: int = 120
+    # RFC 3161 timestamps: on by default, like Wayback. The TSA only ever sees
+    # a nonced commitment, never a file hash. RESCUE_ARCHIVING_TIMESTAMP=0 off.
+    timestamp_enabled: bool = True
+    tsa_url: str = DEFAULT_TSA_URL
+    tsa_timeout: int = 30
 
     @property
     def db_path(self) -> Path:
@@ -135,6 +147,8 @@ def get_config() -> Config:
     )
     wayback = os.environ.get("RESCUE_ARCHIVING_WAYBACK", "1").lower() not in ("0", "false", "no")
     archivebox = os.environ.get("RESCUE_ARCHIVING_ARCHIVEBOX", "0").lower() in ("1", "true", "yes")
+    timestamp = os.environ.get("RESCUE_ARCHIVING_TIMESTAMP", "1").lower() not in ("0", "false", "no")
+    tsa_url = os.environ.get("RESCUE_ARCHIVING_TSA_URL") or DEFAULT_TSA_URL
     return Config(
         root=root,
         data_dir=data_dir,
@@ -142,6 +156,8 @@ def get_config() -> Config:
         operator=operator,
         wayback_enabled=wayback,
         archivebox_enabled=archivebox,
+        timestamp_enabled=timestamp,
+        tsa_url=tsa_url,
     )
 
 
@@ -160,8 +176,13 @@ class Capability:
 
 
 def _tool_version(name: str, exe: str) -> str | None:
-    # exiftool uses -ver; everything else we care about supports --version.
-    args = [exe, "-ver"] if name == "exiftool" else [exe, "--version"]
+    # exiftool uses -ver, openssl uses the 'version' subcommand; the rest take --version.
+    if name == "exiftool":
+        args = [exe, "-ver"]
+    elif name == "openssl":
+        args = [exe, "version"]
+    else:
+        args = [exe, "--version"]
     try:
         out = subprocess.run(
             args, capture_output=True, text=True, timeout=15, check=False

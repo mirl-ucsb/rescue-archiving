@@ -16,7 +16,7 @@ authors:
     affiliation: "Material / Image Research Lab (MIRL), University of California, Santa Barbara"
   - name: "Material / Image Research Lab (MIRL), University of California, Santa Barbara"
     website: "https://mirl.arthistory.ucsb.edu"
-version: "0.2.1"
+version: "0.3.0"
 date-released: "2026-09-10"
 license: MIT
 repository-code: "https://github.com/mirl-ucsb/rescue-archiving"

@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
-from . import config, db, hashing, metadata
+from . import config, db, hashing, metadata, timestamp
 
 # A single operator-supplied post may legitimately hold several files (e.g. a
 # multi-image post). More than this many media originals from one ``add`` is
@@ -46,6 +46,7 @@ class IngestSummary:
     wayback_url: str | None = None
     warc_path: str | None = None
     warnings: list[str] = field(default_factory=list)
+    stamps: list[dict] = field(default_factory=list)   # RFC 3161 results per file
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +255,20 @@ def ingest(
     for path in saved:
         _register_original(conn, cfg, item_id, path, actor, summary,
                            force_original=(source_kind == "file"))
+
+    # --- 2b. Independent time attestation (RFC 3161) --------------------
+    # Stamp what came from the source (originals and platform sidecars), not
+    # the locally derived keyframes. Each stamp is a nonced commitment, so the
+    # TSA never learns a file hash. Failure is recorded, never fatal.
+    for f in list(summary.files):
+        if f["role"] in ("original", "sidecar"):
+            res = timestamp.stamp_file(conn, cfg, item_id=item_id,
+                                       path=cfg.data_dir / f["path"],
+                                       sha256_hex=f["sha256"], actor=actor)
+            summary.stamps.append(res)
+            if res["status"] == "failed":
+                summary.warnings.append(
+                    f"timestamp failed for {f['path']}: {res['detail']}")
 
     # --- 3. Derived provenance: EXIF sidecars + video keyframes ----------
     for path in saved:

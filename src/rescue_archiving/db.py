@@ -47,8 +47,8 @@ CREATE TABLE IF NOT EXISTS files (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     item_id           INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
     path              TEXT NOT NULL,                 -- relative to data_dir
-    media_type        TEXT,                          -- 'video' | 'image' | 'page' | 'info' | 'audio' | 'other'
-    role              TEXT NOT NULL DEFAULT 'original', -- 'original' | 'keyframe' | 'sidecar' | 'snapshot'
+    media_type        TEXT,                          -- 'video' | 'image' | 'page' | 'info' | 'audio' | 'proof' | 'other'
+    role              TEXT NOT NULL DEFAULT 'original', -- 'original' | 'keyframe' | 'sidecar' | 'snapshot' | 'proof'
     sha256            TEXT NOT NULL,
     phash             TEXT,
     bytes             INTEGER NOT NULL,

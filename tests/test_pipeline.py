@@ -14,7 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from rescue_archiving import capture, config, db, dedup, export, hashing, metadata
+from rescue_archiving import (capture, config, db, dedup, export, hashing, metadata,
+                              timestamp)
 
 
 @pytest.fixture()
@@ -26,6 +27,7 @@ def cfg(tmp_path: Path) -> config.Config:
         operator="tester",
         wayback_enabled=False,  # never hit the network in tests
         archivebox_enabled=False,
+        timestamp_enabled=False,  # RFC 3161 needs a TSA; stamp tests enable it with mocks
     )
     db.init_db(c)
     return c
@@ -439,3 +441,148 @@ def test_include_sensitive_respects_identity_redaction(cfg):
     assert sens["uploader_handle"] == "FLAGGED_HANDLE"   # disclosure still works
     assert sens["recorded_by"] is None                    # staff identity redacted
     assert "OP_CANARY" not in json.dumps(manifest)
+
+
+# ---------------------------------------------------------------------------
+# RFC 3161 timestamps (0.3.0). Network-free: openssl and the TSA are stood in.
+# ---------------------------------------------------------------------------
+FAKE_CHAIN = "-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----\n"
+ATTESTED = "2026-09-10T17:18:04+00:00"
+
+
+def _mock_tsa(monkeypatch, *, post_ok=True):
+    """Stand in for openssl and the network so the stamping flow runs offline."""
+    monkeypatch.setattr(config, "has", lambda tool: tool == "openssl")
+    monkeypatch.setattr(config, "tool_version", lambda tool: "LibreSSL test")
+    monkeypatch.setattr(timestamp, "build_query", lambda comm: b"QUERY")
+    monkeypatch.setattr(timestamp, "request_stamp",
+                        lambda cfg, tsq: (b"TOKEN", "ok", "http 200") if post_ok
+                        else (None, "failed", "ConnectionError: offline"))
+    monkeypatch.setattr(timestamp, "reply_info", lambda tsr: {
+        "granted": True, "gen_time": ATTESTED,
+        "policy": "2.16.840.1.114412.7.1", "raw_status": "Status: Granted."})
+    monkeypatch.setattr(timestamp, "extract_chain", lambda tsr: FAKE_CHAIN)
+
+
+def _stamp_cfg(cfg):
+    return dataclasses.replace(cfg, timestamp_enabled=True, tsa_url="http://tsa.test")
+
+
+def _ingest_file(cfg, src):
+    with db.connect(cfg) as conn:
+        iid = db.insert_item(
+            conn, ingested_by="t", source_url=None, source_kind="file",
+            platform="local-file", claimed_location=None, claimed_datetime=None,
+            description=None, tags=None, graphic_flag=False)
+        summary = capture.ingest(conn, cfg, item_id=iid, source=str(src),
+                                 source_kind="file", actor="t", graphic=False,
+                                 keyframes_n=0)
+    return iid, summary
+
+
+def test_commitment_hides_file_hash():
+    import hashlib
+    sha = hashlib.sha256(b"x").hexdigest()
+    n1, n2 = b"\x01" * 32, b"\x02" * 32
+    c1 = timestamp.commitment(sha, n1)
+    assert c1 != sha and len(c1) == 64
+    assert timestamp.commitment(sha, n1) == c1     # deterministic
+    assert timestamp.commitment(sha, n2) != c1     # the nonce changes it
+
+
+def test_parse_gen_time_formats():
+    p = timestamp._parse_gen_time
+    assert p("Sep 10 17:18:04 2026 GMT") == ATTESTED
+    assert p("Sep  1 07:08:09 2026 GMT") == "2026-09-01T07:08:09+00:00"   # padded day
+    assert p("Sep 10 17:18:04.5 2026 GMT") == ATTESTED                   # fractional
+    assert p("garbage") is None
+
+
+def test_reply_info_parses_openssl_reply(monkeypatch):
+    text = ("Status info:\nStatus: Granted.\nStatus description: unspecified\n"
+            "Policy OID: 2.16.840.1.114412.7.1\nTime stamp: Sep 10 17:18:04 2026 GMT\n")
+    monkeypatch.setattr(timestamp, "_run",
+                        lambda args, stdin=None, timeout=60: (0, text.encode(), ""))
+    info = timestamp.reply_info(b"TOKEN")
+    assert info["granted"] is True
+    assert info["gen_time"] == ATTESTED
+    assert info["policy"] == "2.16.840.1.114412.7.1"
+
+
+def test_stamp_registers_proofs_and_bundle_carries_them(cfg, tmp_path, monkeypatch):
+    _mock_tsa(monkeypatch)
+    scfg = _stamp_cfg(cfg)
+    iid, summary = _ingest_file(scfg, _make_file(tmp_path / "clip.mp4", b"evidence"))
+    with db.connect(scfg) as conn:
+        files = db.get_files(conn, iid)
+        caps = conn.execute("SELECT * FROM captures WHERE item_id=? AND method='rfc3161'",
+                            (iid,)).fetchall()
+        log = [r["action"] for r in conn.execute(
+            "SELECT action FROM custody_log WHERE item_id=?", (iid,)).fetchall()]
+    assert summary.stamps and summary.stamps[0]["status"] == "ok"
+    proofs = [f for f in files if f["role"] == "proof"]
+    assert {Path(f["path"]).name for f in proofs} == {"clip.mp4.tsr", "clip.mp4.stamp.json"}
+    for f in proofs:  # frozen like an original
+        mode = stat.S_IMODE(os.stat(scfg.data_dir / f["path"]).st_mode)
+        assert not (mode & stat.S_IWUSR)
+    assert len(caps) == 1 and caps[0]["status"] == "ok" and ATTESTED in caps[0]["detail"]
+    assert "timestamp_confirmed" in log
+    # Proofs carry no identity, so they travel in the DEFAULT bundle, and the
+    # manifest surfaces the attested time for whoever verifies it.
+    with db.connect(scfg) as conn:
+        bundle = export.export_bundle(conn, scfg)
+    copied = {p.name for p in (bundle / "files").rglob("*") if p.is_file()}
+    assert {"clip.mp4.tsr", "clip.mp4.stamp.json"} <= copied
+    manifest = json.loads((bundle / "manifest.json").read_text())
+    stamps = [c for c in manifest["items"][0]["captures"] if c["method"] == "rfc3161"]
+    assert stamps and stamps[0]["attested_ts"] == ATTESTED
+
+
+def test_timestamp_disabled_is_skipped_and_logged(cfg, tmp_path):
+    iid, summary = _ingest_file(cfg, _make_file(tmp_path / "doc.txt", b"x"))  # fixture: off
+    with db.connect(cfg) as conn:
+        proofs = conn.execute("SELECT COUNT(*) FROM files WHERE item_id=? AND role='proof'",
+                              (iid,)).fetchone()[0]
+        log = [r["action"] for r in conn.execute(
+            "SELECT action FROM custody_log WHERE item_id=?", (iid,)).fetchall()]
+    assert proofs == 0
+    assert "timestamp_skipped" in log
+    assert summary.stamps[0]["status"] == "skipped"
+    assert not any("timestamp" in w for w in summary.warnings)   # deliberate, not a warning
+
+
+def test_stamp_failure_is_recorded_not_fatal(cfg, tmp_path, monkeypatch):
+    _mock_tsa(monkeypatch, post_ok=False)
+    scfg = _stamp_cfg(cfg)
+    iid, summary = _ingest_file(scfg, _make_file(tmp_path / "clip.mp4", b"bytes"))
+    with db.connect(scfg) as conn:
+        cap = conn.execute("SELECT * FROM captures WHERE item_id=? AND method='rfc3161'",
+                           (iid,)).fetchone()
+        proofs = conn.execute("SELECT COUNT(*) FROM files WHERE item_id=? AND role='proof'",
+                              (iid,)).fetchone()[0]
+        log = [r["action"] for r in conn.execute(
+            "SELECT action FROM custody_log WHERE item_id=?", (iid,)).fetchall()]
+    assert summary.files                       # the ingest itself still succeeded
+    assert cap["status"] == "failed" and proofs == 0
+    assert "timestamp_failed" in log
+    assert any("timestamp failed" in w for w in summary.warnings)
+
+
+def test_verify_stamp_detects_tamper(cfg, tmp_path, monkeypatch):
+    _mock_tsa(monkeypatch)
+    scfg = _stamp_cfg(cfg)
+    iid, _ = _ingest_file(scfg, _make_file(tmp_path / "clip.mp4", b"original evidence"))
+    with db.connect(scfg) as conn:
+        meta_path = scfg.data_dir / timestamp.list_stamp_metas(conn, iid)[0]["path"]
+    # Signature checking is openssl's job; stand it in as OK so this test isolates
+    # the commitment binding, which is ours.
+    monkeypatch.setattr(timestamp, "verify", lambda tsr, comm, chain: (True, "mocked"))
+    good = timestamp.verify_stamp(scfg, meta_path)
+    assert good["ok"] is True and good["gen_time"] == ATTESTED
+    # Alter the stamped original: the recomputed commitment can no longer match,
+    # and that is caught before any signature check, fully offline.
+    original = scfg.data_dir / json.loads(meta_path.read_text())["file"]
+    os.chmod(original, 0o644)
+    original.write_bytes(b"altered evidence")
+    bad = timestamp.verify_stamp(scfg, meta_path)
+    assert bad["ok"] is False and "no longer match" in bad["reason"]

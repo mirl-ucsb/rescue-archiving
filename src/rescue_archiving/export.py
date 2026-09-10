@@ -60,6 +60,30 @@ def _since_clause(since: str | None) -> tuple[str, tuple]:
     return "", ()
 
 
+def _capture_entry(c, redact_source: bool) -> dict:
+    entry = {
+        "method": c["method"],
+        "capture_ts": c["capture_ts"],
+        "wayback_url": None if redact_source else c["wayback_url"],
+        "warc_path": None if redact_source else c["warc_path"],
+        "tool": c["tool"],
+        "tool_version": c["tool_version"],
+        "status": c["status"],
+    }
+    # RFC 3161 rows keep the TSA-attested time and the stamped file in detail
+    # (never a source URL), so surface those for anyone verifying the export.
+    # Other methods' detail can carry downloader output and stays unexported.
+    if c["method"] == "rfc3161" and c["detail"]:
+        try:
+            d = json.loads(c["detail"])
+        except (ValueError, TypeError):
+            d = {}
+        entry["attested_ts"] = d.get("gen_time")
+        entry["stamped_file"] = d.get("file")
+        entry["tsa"] = d.get("tsa")
+    return entry
+
+
 def build_manifest(
     conn,
     cfg: config.Config,
@@ -90,15 +114,7 @@ def build_manifest(
             for f in db.get_files(conn, iid)
         ]
         captures = [
-            {
-                "method": c["method"],
-                "capture_ts": c["capture_ts"],
-                "wayback_url": None if redact_source else c["wayback_url"],
-                "warc_path": None if redact_source else c["warc_path"],
-                "tool": c["tool"],
-                "tool_version": c["tool_version"],
-                "status": c["status"],
-            }
+            _capture_entry(c, redact_source)
             for c in conn.execute(
                 "SELECT * FROM captures WHERE item_id = ? ORDER BY id", (iid,)
             ).fetchall()
@@ -289,6 +305,9 @@ def _bundle_readme(redact_source: bool, redact_identity: bool,
         "manifest.csv   - one row per file (flat)",
         "SHA256SUMS     - integrity checksums; verify with: shasum -c SHA256SUMS",
         "files/         - read-only copies of captured originals (if included)",
+        "                 *.tsr and *.stamp.json beside an original are RFC 3161",
+        "                 timestamp proofs: verify with rescue-archiving verify-stamps,",
+        "                 or with plain openssl using the verify_hint in the .stamp.json",
         "",
         f"source / Wayback URLs : {'redacted' if redact_source else 'RETAINED (a URL can name an uploader)'}",
         f"operator / analyst id : {'redacted' if redact_identity else 'RETAINED'}",

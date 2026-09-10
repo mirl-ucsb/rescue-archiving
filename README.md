@@ -494,6 +494,50 @@ afterthought. In practice:
 
 ---
 
+## Proving when something existed (timestamps)
+
+A hash proves *what* the bytes are. It cannot, on its own, prove *when* they
+existed: the custody log records that, but the log lives on your machine, and
+anyone with access to the database could rewrite it. So every capture also asks
+an independent Time Stamping Authority (TSA) to sign a statement that this
+material existed at this moment, using the RFC 3161 standard that digital
+forensics and courts already rely on.
+
+How it protects sources: the authority never sees your file's hash. The tool
+stamps a **nonced commitment** (a hash of a random secret plus the file hash)
+and keeps the secret locally beside the proof. A hash of a known video could be
+matched; a commitment cannot. This is far less exposure than the Wayback request
+you already make, which sends the URL itself.
+
+What you get, beside each original and travelling in every bundle:
+
+- `<file>.tsr`, the raw token, verifiable with plain `openssl ts -verify`.
+- `<file>.stamp.json`, the nonce, the commitment, the authority, the attested
+  time, the authority's certificate chain, and a `verify_hint`.
+
+Both are frozen read-only, hashed, and in the chain of custody with role `proof`.
+
+```bash
+rescue-archiving verify-stamps        # re-verify every proof; exit 1 on any failure
+rescue-archiving verify-stamps 4      # just item 4
+```
+
+`verify-stamps` recomputes each file's commitment from its current bytes and
+checks the token binds it. Altered bytes fail before any signature is examined,
+fully offline. Stamps are on by default; `add --no-timestamp` skips one, and
+`RESCUE_ARCHIVING_TIMESTAMP=0` turns them off. The default authority is
+DigiCert's free public responder, whose root is in the standard Mozilla trust
+store; set `RESCUE_ARCHIVING_TSA_URL` to use another (for example
+`https://freetsa.org/tsr`, which is self-rooted and verifies from its own
+embedded chain).
+
+Honest limits: a timestamp proves existence at a time, not authenticity of
+content, and it relies on the authority having signed truthfully; the chain is
+stored so the proof survives the authority. A trustless second anchor
+(OpenTimestamps, on Bitcoin) is the planned complement.
+
+---
+
 ## What the tool protects, and what it does not
 
 **It protects:**
@@ -598,11 +642,12 @@ and developers.
 |---|---|
 | `init` | Create the data tree and schema (idempotent). |
 | `doctor` | Show config paths and external-tool capabilities. |
-| `add URL\|PATH` | Ingest one item. Options: `--location --datetime --note --tags --graphic --keyframes --make-thumbnails --uploader-handle --contributor-note --operator --no-wayback`. |
+| `add URL\|PATH` | Ingest one item. Options: `--location --datetime --note --tags --graphic --keyframes --make-thumbnails --uploader-handle --contributor-note --operator --no-wayback --no-timestamp`. |
 | `list` | List items. Options: `--status --tag --since`. |
 | `show ID` | Full detail. Options: `--show-sensitive` (logged), `--log-tail`. |
 | `verify ID` | Open a verification record. Options: `--verdict --method --notes --verifier`. |
 | `check [ID]` | Recompute SHA-256 and report match / mismatch / missing. Exits non-zero on any mismatch or missing file, so it can gate scheduled integrity sweeps. |
+| `verify-stamps [ID]` | Re-verify RFC 3161 timestamp proofs: recompute each file's nonced commitment and check the authority's token binds it. Exits non-zero on any invalid stamp. |
 | `dedup` | Link exact (SHA-256) and near (pHash) duplicates. Option: `--threshold`. |
 | `export` | Options: `--format json\|csv\|bundle --since --out --redact-source --internal --include-sensitive --no-media`. A bundle redacts source links and staff identity by default; `--internal` keeps them. |
 
@@ -616,6 +661,7 @@ and developers.
 | exiftool + PyExifTool | EXIF extraction                        | no EXIF sidecars |
 | imagehash + Pillow    | perceptual hash (near-duplicate links) | exact SHA-256 dedup only |
 | archivebox            | WARC page snapshot                     | off by default anyway |
+| openssl               | RFC 3161 timestamp query, reply, verify | no timestamp proofs |
 
 When a tool is missing, the affected step is skipped and the skip is recorded in
 the custody log. **A silent skip is not coverage:** run `doctor` to see exactly
@@ -639,7 +685,8 @@ Milestones M1 through M5 are implemented: repo skeleton and SQLite schema with
 `add`/`list`/`show` (M1); capture, SHA-256, read-only storage, and the custody
 log (M2); the Wayback Save API, EXIF sidecars, and keyframe extraction (M3);
 perceptual hashing, dedup linking, and the verification workflow (M4); and JSON,
-CSV, and bundle export plus `check` integrity re-verification (M5). Cryptographic
+CSV, and bundle export plus `check` integrity re-verification (M5). RFC 3161
+timestamp proofs and `verify-stamps` were added in 0.3.0. Cryptographic
 signing of manifests (C2PA) is intentionally out of scope for now.
 
 ### Project guardrails
@@ -656,6 +703,9 @@ security policy.
    cookie or stored credential cannot leak a private session into a capture.
 2. **Integrity.** Originals are never modified or re-encoded. Files are hashed
    on ingest and frozen read-only (mode 0444). `check` re-verifies them later.
+   Every original and platform sidecar also receives an RFC 3161 timestamp
+   proof from an independent authority (nonce-committed, so the authority never
+   sees the hash); `verify-stamps` re-verifies those.
 3. **Independent provenance.** Every web item also requests a Wayback Machine
    snapshot, so a third party holds a timestamped copy. Failures are recorded.
 4. **Source protection.** A flagged handle is stored in a separate,
@@ -680,9 +730,11 @@ security policy.
 - **items**: id, ingest_ts, ingested_by, source_url, source_kind, platform,
   claimed_location, claimed_datetime, description, status, tags, graphic_flag.
 - **files**: id, item_id, path, media_type, role, sha256, phash, bytes,
-  original_filename, created_ts.
+  original_filename, created_ts. Roles: original, keyframe, sidecar, snapshot,
+  and proof (RFC 3161 `.tsr` / `.stamp.json`, frozen and hashed like originals).
 - **captures**: id, item_id, method, capture_ts, wayback_url, warc_path, tool,
-  tool_version, status, detail.
+  tool_version, status, detail. Methods include yt-dlp, gallery-dl, file-ingest,
+  wayback, archivebox, and rfc3161 (whose detail carries the attested time).
 - **verifications**: id, item_id, verifier, verified_ts, verdict, method, notes.
 - **custody_log**: id, item_id, ts, actor, action, detail. Append-only, enforced
   by database triggers that abort UPDATE and DELETE. The chain-of-custody
@@ -700,7 +752,9 @@ data/                          # mode 0700, gitignored, access-controlled
   originals/
     item_000001/
       <id>.mp4                 # mode 0444, byte-identical to capture
-      <id>.info.json           # platform provenance sidecar
+      <id>.mp4.tsr             # RFC 3161 token, role='proof'
+      <id>.mp4.stamp.json      # nonce, commitment, attested time, TSA chain
+      <id>.info.json           # platform provenance sidecar (stamped too)
       <id>.mp4.exif.json       # EXIF sidecar (kept out of default export)
       keyframes/               # derived, hashed, role='keyframe'
   snapshots/
@@ -715,6 +769,8 @@ exports/                       # manifests, CSVs, bundles
 - `RESCUE_ARCHIVING_OPERATOR` - name recorded as the actor in the custody log
   (default: your OS user; set a role label if staff anonymity matters).
 - `RESCUE_ARCHIVING_ARCHIVEBOX=1` - enable optional ArchiveBox WARC capture.
+- `RESCUE_ARCHIVING_TIMESTAMP=0` - disable RFC 3161 timestamp proofs (on by default).
+- `RESCUE_ARCHIVING_TSA_URL` - timestamp authority (default: DigiCert's public responder).
 - `RESCUE_ARCHIVING_ROOT` - base directory if you prefer to set one root.
 
 ### Decisions (confirmed 2026-06-01)
@@ -741,19 +797,23 @@ exports/                       # manifests, CSVs, bundles
 
 ### Threat model and limitations
 
-Protects: integrity of captured bytes (read-only, hashed, `check`-verifiable;
-append-only custody log); deliberately recorded source identities (isolated and
-excluded from default exports); independent provenance (Wayback); and locality
+Protects: integrity of captured bytes (read-only, hashed, `check`-verifiable,
+RFC 3161 timestamped; append-only custody log); deliberately recorded source
+identities (isolated and excluded from default exports); independent provenance
+(Wayback and an independent timestamp authority); and locality
 (owner-only storage, no cloud).
 
 Does not, and caveats: it does not verify content (people do); gallery-dl is
 pinned to a single item (`--range 1`), which prevents feed expansion but can
 under-capture a multi-image post; provenance sidecars persist on disk and carry
 identity/GPS, so the whole `data/` tree is sensitive; integrity anchors are
-SHA-256 plus the append-only log, not yet cryptographic signatures: the custody
-triggers stop accidental or casual rewriting, but a party with direct disk or
-database access can drop the triggers or rebuild the store, so OS permissions
-and full-disk encryption are the backstop until C2PA signing lands; Wayback is
+SHA-256, the append-only log, and RFC 3161 timestamp proofs: the custody
+triggers stop accidental or casual rewriting, and a party with direct disk or
+database access can drop the triggers or rebuild the store, but cannot forge a
+timestamp an independent authority already issued, so a stamped original that
+is later altered fails `verify-stamps`; the residual trust is in the authority
+itself (its chain is stored with each proof), and OS permissions and full-disk
+encryption remain the backstop for the store as a whole; Wayback is
 best-effort; and the tool assumes a trusted operator on a secured, encrypted
 host (it is not hardened against a hostile operator).
 
