@@ -16,6 +16,16 @@ lines into a Terminal window, you can run it. This guide walks you through every
 step in plain language; the precise technical details are gathered at the end
 for those who want them.
 
+rescue-archiving is one of four MIRL instruments for heritage after crisis,
+built to work alone or in sequence: it makes the verifiable copy before the
+material disappears, [MIRL Aftermath](https://github.com/mirl-ucsb/mirl-aftermath)
+builds the condition dossier for damage to what still stands,
+[MIRL Lacuna](https://github.com/mirl-ucsb/mirl-lacuna) catalogues what is
+gone, and the [MIRL 3D Analyzer](https://github.com/mirl-ucsb/mirl-3d-analyzer)
+measures what survives. Each keeps its exports plain and portable, so work
+moves between the tools without lock-in. The four together:
+[mirl.arthistory.ucsb.edu/mirl-tools](https://mirl.arthistory.ucsb.edu/mirl-tools/).
+
 ---
 
 ## Contents
